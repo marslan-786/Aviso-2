@@ -4,7 +4,7 @@ import json
 import threading
 import random
 from flask import Flask, render_template, request, jsonify
-from playwright_stealth import stealth_sync
+# from playwright_stealth import stealth_sync  <-- یہ لائن ایرر دے رہی تھی، اسے ہٹا دیا گیا ہے
 
 app = Flask(__name__)
 
@@ -32,6 +32,45 @@ def take_screenshot(page, name):
         bot_status["images"].append(filename)
     except Exception as e:
         print(f"Screenshot failed: {e}")
+
+# --- MANUAL STEALTH FUNCTION (No Library Needed) ---
+def apply_stealth(page):
+    """
+    یہ فنکشن لائبریری کے بغیر براؤزر کو چھپائے گا کہ یہ بوٹ ہے۔
+    """
+    try:
+        # 1. Remove 'webdriver' property
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        # 2. Mock Chrome Runtime
+        page.add_init_script("window.chrome = { runtime: {} };")
+        
+        # 3. Mock Plugins (تاکہ خالی نہ نظر آئیں)
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+        """)
+        
+        # 4. Mock Languages
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+        """)
+        
+        # 5. Mock WebGL (Graphics Card) - اہم ہے
+        page.add_init_script("""
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                if (parameter === 37445) return 'Intel Open Source Technology Center'; // UNMASKED_VENDOR_WEBGL
+                if (parameter === 37446) return 'Mesa DRI Intel(R) Ivybridge Mobile '; // UNMASKED_RENDERER_WEBGL
+                return getParameter(parameter);
+            };
+        """)
+        print("Stealth scripts injected successfully.")
+    except Exception as e:
+        print(f"Stealth injection failed: {e}")
 
 # --- JAVASCRIPT INTELLIGENCE ---
 def get_best_task_via_js(page):
@@ -61,27 +100,18 @@ def get_best_task_via_js(page):
         return data.length > 0 ? data[0] : null;
     }""")
 
-# --- NEW: HANDLE INTERMEDIATE PAGES ---
+# --- HANDLE INTERMEDIATE PAGES ---
 def handle_intermediate_pages(new_page):
-    """
-    یہ فنکشن ویڈیو تک پہنچنے کے راستے میں آنے والے بٹنوں کو ہینڈل کرے گا۔
-    """
     print("Checking for intermediate buttons...")
-    
-    # 3 بار کوشش کریں (اگر ملٹیپل پیجز ہوں)
     for _ in range(3):
         try:
-            # کیا کوئی بڑا "Start Watching" یا "Play" بٹن ہے؟
-            # Aviso اکثر 'Приступить к просмотру' (Start watching) کا بٹن دیتا ہے
             start_btn = new_page.locator("a.tr_but_b, button.video-btn, text='Приступить к просмотру'")
-            
             if start_btn.count() > 0 and start_btn.first.is_visible():
                 print("Intermediate button found! Clicking...")
                 start_btn.first.click()
-                time.sleep(3) # اگلے پیج کا انتظار
+                time.sleep(3)
             else:
-                print("No intermediate button found (Direct video?).")
-                break # اگر بٹن نہیں ہے تو شاید ہم ویڈیو پر پہنچ گئے ہیں
+                break
         except:
             break
 
@@ -91,7 +121,6 @@ def process_youtube_tasks(context, page):
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
-    # Remove AdBlock warning
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
 
     for i in range(1, 25): 
@@ -101,7 +130,7 @@ def process_youtube_tasks(context, page):
         task_data = get_best_task_via_js(page)
         
         if not task_data:
-            print("No video tasks found via JS. Reloading...")
+            print("No video tasks found. Reloading...")
             page.reload()
             time.sleep(5)
             continue
@@ -116,25 +145,27 @@ def process_youtube_tasks(context, page):
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_0_Target_Locked")
 
-            # --- ACTION 1: CLICK MAIN LINK ---
+            # --- ACTION 1: CLICK START ---
             start_selector = task_data['startSelector']
             
             with context.expect_page() as new_page_info:
                 page.click(start_selector)
             
             new_page = new_page_info.value
-            stealth_sync(new_page) # Stealth Mode Apply
+            
+            # --- APPLY MANUAL STEALTH ---
+            apply_stealth(new_page)
+            
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # --- ACTION 1.5: HANDLE INTERMEDIATE STEPS ---
-            # اگر ڈائریکٹ ویڈیو نہیں کھلی اور کوئی بٹن دبانا ہے تو یہ فنکشن کرے گا
+            # --- HANDLE INTERMEDIATE ---
             handle_intermediate_pages(new_page)
             
-            # --- CAPTCHA CHECK (WAIT INSTEAD OF SKIP) ---
             time.sleep(3)
-            take_screenshot(new_page, f"Task_{i}_1_Page_Opened")
+            take_screenshot(new_page, f"Task_{i}_1_Video_Page")
             
+            # --- CAPTCHA CHECK ---
             is_captcha = new_page.evaluate("""() => {
                 return document.title.includes("hCaptcha") || 
                        document.body.innerText.includes("hCaptcha") ||
@@ -145,21 +176,17 @@ def process_youtube_tasks(context, page):
                 print("🚨 CAPTCHA DETECTED!")
                 bot_status["step"] = "⚠️ Captcha Detected! Waiting 60s..."
                 take_screenshot(new_page, f"Task_{i}_CAPTCHA_WAIT")
-                
-                # ہم 60 سیکنڈ انتظار کریں گے شاید یہ خود حل ہو جائے یا اگلی بار نہ آئے
-                # (اگر آپ مینولی سولو کر سکتے ہیں تو اس دوران کر لیں)
                 time.sleep(60)
                 
-                # دوبارہ چیک کریں
                 is_captcha_still = new_page.evaluate("() => document.querySelector('iframe[src*=\"hcaptcha\"]') !== null")
                 if is_captcha_still:
-                    print("Captcha still there. Closing tab.")
+                    print("Captcha still there. Skipping.")
                     new_page.close()
                     continue
 
             # --- ACTION 2: SYNC WATCHING ---
             print("Syncing timer...")
-            max_wait = 120 # زیادہ ٹائم دیں کیونکہ درمیانی سٹیپس بھی ہو سکتے ہیں
+            max_wait = 120 
             timer_finished = False
             
             for tick in range(max_wait):
@@ -167,11 +194,9 @@ def process_youtube_tasks(context, page):
                     new_page.close()
                     return
                 
-                # Mouse Simulation
                 try: new_page.mouse.move(random.randint(100, 500), random.randint(100, 500))
                 except: pass
 
-                # Check Main Page Status
                 status_check = page.evaluate(f"""() => {{
                     const btn = document.querySelector('{task_data['confirmSelector']}');
                     const err = document.querySelector('{task_data['errorSelector']}');
@@ -230,7 +255,7 @@ def run_aviso_login(username, password):
 
     with sync_playwright() as p:
         try:
-            # --- STEALTH LAUNCH ---
+            # --- BROWSER LAUNCH ---
             context = p.chromium.launch_persistent_context(
                 USER_DATA_DIR,
                 headless=True,
@@ -241,7 +266,7 @@ def run_aviso_login(username, password):
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--start-maximized",
-                    "--disable-blink-features=AutomationControlled",
+                    "--disable-blink-features=AutomationControlled", # Anti-Bot flag
                     "--disable-infobars",
                     "--mute-audio"
                 ],
@@ -249,7 +274,9 @@ def run_aviso_login(username, password):
             )
             
             page = context.new_page()
-            stealth_sync(page) # Stealth Main Page
+            
+            # --- APPLY STEALTH TO MAIN PAGE ---
+            apply_stealth(page)
             
             bot_status["step"] = "Opening Site..."
             page.goto("https://aviso.bz/tasks-youtube", timeout=60000)
