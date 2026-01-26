@@ -3,6 +3,7 @@ import time
 import json
 import threading
 import random
+import re # ٹائم پڑھنے کے لیے یہ لائبریری ضروری ہے
 from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
@@ -41,104 +42,129 @@ def take_screenshot(page, name):
     except Exception as e:
         print(f"Screenshot failed: {e}")
 
-# --- NEW: YouTube Task Logic ---
+# --- NEW: SMART YOUTUBE LOGIC ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Navigating to YouTube Tasks..."
-    # ڈائریکٹ لنک پر جائیں تاکہ نیویگیشن کا مسئلہ نہ ہو
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     force_google_translate_click(page)
-    take_screenshot(page, "youtube_task_list")
+    take_screenshot(page, "1_youtube_list_loaded")
 
-    # لوپ شروع کریں (مثلاً 10 ویڈیوز کے لیے)
-    for i in range(10):
+    # Loop for tasks
+    for i in range(1, 15): # تھوڑے زیادہ ٹاسک چیک کریں گے
         if not bot_status["is_running"]: break
         
-        bot_status["step"] = f"Looking for Video Task #{i+1}..."
+        bot_status["step"] = f"Scanning Task #{i}..."
+        print(f"Scanning for task #{i}...")
         
-        # تمام ٹاسک کی قطاریں (Rows) ڈھونڈیں جو 'subscribe' نہ ہوں
-        # ہم ان قطاروں کو ڈھونڈیں گے جن میں 'Watch the video' یا 'Просмотр видео' لکھا ہو
-        # اور ان کو اگنور کریں گے جن میں 'Subscribe' یا 'Подписаться' ہو
+        # --- FILTERING LOGIC ---
+        # 1. صرف وہ قطاریں جن میں 'video' ہو (تاکہ Watch والے ملیں)
+        # 2. 'Subscribe' اور 'Like' والوں کو نکالو
+        # Aviso پر اکثر Watch والے ٹاسک کا نام 'Посмотреть видео' (Watch video) ہوتا ہے
         
-        # یہ سیلیکٹر ان تمام ٹاسکس کو اٹھائے گا جو ویڈیو والے ہیں
-        task_selector = "tr[id^='task_']:has-text('video')" 
+        task_rows = page.locator("tr[id^='task_']")
+        count = task_rows.count()
         
-        # اگر لسٹ میں ویڈیو نہیں ملتی تو ریفریش کریں
-        if not page.is_visible(task_selector):
-            print("No video tasks visible, refreshing...")
+        target_row = None
+        task_duration = 20 # ڈیفالٹ ٹائم اگر کچھ نہ ملا
+        
+        # لسٹ میں سے صحیح ٹاسک ڈھونڈو
+        for idx in range(count):
+            row = task_rows.nth(idx)
+            text = row.inner_text().lower()
+            
+            # فلٹرز: ویڈیو ہونی چاہیے، لائک اور سبسکرائب نہیں
+            if ("video" in text or "видео" in text) and \
+               ("subscribe" not in text and "подписаться" not in text) and \
+               ("like" not in text and "лайк" not in text):
+                
+                target_row = row
+                
+                # --- SMART TIMER LOGIC ---
+                # متن میں سے ٹائم نکالو (مثلاً "180 sec" یا "20 сек")
+                # Regex پیٹرن: کوئی بھی نمبر جس کے بعد sec یا сек ہو
+                time_match = re.search(r'(\d+)\s*(sec|сек)', text)
+                if time_match:
+                    task_duration = int(time_match.group(1))
+                    print(f"Detected Duration: {task_duration} seconds")
+                else:
+                    print("Could not detect time, using default 20s")
+                
+                break # پہلا صحیح ٹاسک مل گیا، لوپ توڑ دو
+        
+        if not target_row:
+            print("No suitable video tasks found. Reloading...")
             page.reload()
             time.sleep(5)
             continue
 
-        # پہلا دستیاب ٹاسک اٹھائیں
-        task_row = page.locator(task_selector).first
-        
-        # چیک کریں کہ کیا یہ واقعی سبسکرپشن والا تو نہیں؟
-        task_text = task_row.inner_text().lower()
-        if "subscribe" in task_text or "подписаться" in task_text:
-            print("Skipping subscription task...")
-            # اس ٹاسک کو لسٹ سے ہٹانے کے لیے پیج ریفریش یا اگلا logic لگانا ہوگا
-            # فی الحال ہم صرف پہلا کلک ایبل ٹاسک ڈھونڈتے ہیں
-            continue
-
         try:
-            # 1. ٹاسک کے ٹائٹل پر کلک کریں تاکہ وہ ایکسپینڈ (Expand) ہو جائے
-            print("Clicking task title...")
-            task_row.locator("span.go-link").click()
-            time.sleep(2)
+            # --- ACTION 1: EXPAND ---
+            print(f"Processing Task with duration: {task_duration}s")
+            target_row.locator("span.go-link").click()
+            time.sleep(3)
+            take_screenshot(page, f"task_{i}_expanded_{task_duration}s")
 
-            # 2. اب "Start" یا "Get Started" بٹن ڈھونڈیں
-            # میں بٹن نیلا یا ہرا ہوتا ہے
-            start_button = task_row.locator("span.kh-ul-li-start-run") 
+            # --- ACTION 2: START ---
+            start_button = target_row.locator("span.kh-ul-li-start-run")
             
             if start_button.is_visible():
-                bot_status["step"] = "Opening Video Tab..."
+                bot_status["step"] = f"Starting Task ({task_duration}s)..."
                 
-                # نیا ٹیب کھلنے کا انتظار کریں
                 with context.expect_page() as new_page_info:
                     start_button.click()
                 
                 new_page = new_page_info.value
+                new_page.wait_for_load_state("domcontentloaded")
                 
-                # --- اہم ترین سٹیپ ---
-                # نئے ٹیب کو سامنے لائیں تاکہ ٹائمر چلے
+                # --- ACTION 3: SMART WAIT ---
                 new_page.bring_to_front()
-                bot_status["step"] = "Watching Video (15-20s)..."
                 
-                # رینڈم انتظار (15 سے 20 سیکنڈ)
-                wait_time = random.randint(18, 25) # تھوڑا زیادہ رکھیں تاکہ سیف رہے
-                print(f"Waiting {wait_time} seconds on video page...")
-                time.sleep(wait_time)
+                # محفوظ انتظار: اصل ٹائم + 3 سے 6 سیکنڈ کا اضافی بفر
+                safe_wait_time = task_duration + random.randint(3, 6)
                 
-                # ٹائم پورا ہونے کے بعد ٹیب بند کر دیں
+                bot_status["step"] = f"Watching for {safe_wait_time}s..."
+                print(f"Waiting for {safe_wait_time} seconds (Task req: {task_duration}s)...")
+                
+                # لمبی ویڈیوز کے لیے ہم چھوٹے ٹکڑوں میں انتظار کریں گے تاکہ بوٹ 'Dead' نہ لگے
+                remaining = safe_wait_time
+                while remaining > 0:
+                    if not bot_status["is_running"]: 
+                        new_page.close()
+                        return
+                    sleep_chunk = min(5, remaining) # ہر 5 سیکنڈ بعد سٹیٹس چیک کرو
+                    time.sleep(sleep_chunk)
+                    remaining -= sleep_chunk
+                
+                # Screenshot of video page just before closing
+                try: take_screenshot(new_page, f"task_{i}_watched_proof")
+                except: pass
+
                 new_page.close()
                 bot_status["step"] = "Video Closed. Confirming..."
                 
-                # واپس مین پیج پر فوکس
+                # --- ACTION 4: CONFIRM ---
                 page.bring_to_front()
+                time.sleep(2)
                 
-                # 3. اب "Confirm" بٹن پر کلک کریں
-                # بٹن کا نام "Confirm viewing" یا "Подтвердить" ہوگا
-                confirm_btn = task_row.locator("span.serf-yam-but") # یہ کلاس اکثر کنفرم بٹن کی ہوتی ہے
-                
+                confirm_btn = target_row.locator("span.serf-yam-but")
                 if confirm_btn.is_visible():
                     confirm_btn.click()
-                    print("Clicked Confirm!")
-                    time.sleep(3) # بیلنس ایڈ ہونے کا انتظار
-                    take_screenshot(page, f"task_{i+1}_completed")
+                    bot_status["step"] = "Confirm Clicked. Waiting Balance..."
+                    time.sleep(4)
+                    take_screenshot(page, f"task_{i}_DONE")
                 else:
-                    print("Confirm button not found, maybe auto-confirmed?")
+                    take_screenshot(page, f"task_{i}_no_confirm_btn")
             
             else:
-                print("Start button not found for this task.")
+                print("Start button hidden.")
 
         except Exception as e:
-            print(f"Task failed: {e}")
-            # اگر ٹاسک فیل ہو تو پیج ریفریش کریں تاکہ پھنسے نہ
+            print(f"Task error: {e}")
             page.reload()
             time.sleep(5)
 
-# --- MAIN LOGIN + TASK FUNCTION ---
+# --- MAIN LOGIN FUNCTION ---
 def run_aviso_login(username, password):
     global bot_status, shared_data
     from playwright.sync_api import sync_playwright
@@ -165,14 +191,13 @@ def run_aviso_login(username, password):
             
             page = context.new_page()
             
-            # --- LOGIN PART (Same as before) ---
-            bot_status["step"] = "Checking Login Status..."
+            # --- LOGIN CHECK ---
+            bot_status["step"] = "Checking Session..."
             page.goto("https://aviso.bz/", timeout=60000)
             page.wait_for_load_state("networkidle")
             
-            # اگر لاگ ان نہیں ہے تو لاگ ان کرو
             if page.is_visible("text=Login") or page.is_visible("text=Вход"):
-                print("Not logged in. Logging in...")
+                print("Logging in...")
                 page.goto("https://aviso.bz/login")
                 page.fill("input[name='username']", username)
                 page.fill("input[name='password']", password)
@@ -182,24 +207,24 @@ def run_aviso_login(username, password):
                 if page.is_visible("input[name='code']"):
                     bot_status["step"] = "WAITING_FOR_CODE"
                     bot_status["needs_code"] = True
+                    take_screenshot(page, "code_needed")
                     while shared_data["otp_code"] is None:
                         time.sleep(2)
                         if not bot_status["is_running"]: return
                     
                     page.fill("input[name='code']", shared_data["otp_code"])
                     page.locator("input[name='code']").press("Enter")
-                    time.sleep(5)
+                    time.sleep(8)
             
-            # --- LOGIN DONE -> START TASKS ---
-            take_screenshot(page, "dashboard_reached")
+            take_screenshot(page, "dashboard_ok")
             
-            # اب یوٹیوب ٹاسک شروع کرو
+            # --- START SMART TASKS ---
             process_youtube_tasks(context, page)
 
         except Exception as e:
             bot_status["step"] = f"Error: {str(e)}"
             print(f"Critical Error: {e}")
-            try: take_screenshot(page, "error_screenshot")
+            try: take_screenshot(page, "critical_error")
             except: pass
         
         finally:
@@ -207,7 +232,7 @@ def run_aviso_login(username, password):
             except: pass
             bot_status["is_running"] = False
 
-# --- FLASK ROUTES (Same as before) ---
+# --- FLASK ROUTES ---
 @app.route('/')
 def index(): return render_template('index.html')
 
