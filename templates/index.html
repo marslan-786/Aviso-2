@@ -1,1 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aviso Bot Controller</title>
+    <style>
+        body { font-family: sans-serif; background: #222; color: #fff; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        input { width: 100%; padding: 10px; margin: 10px 0; }
+        button { width: 100%; padding: 10px; background: #28a745; color: white; border: none; cursor: pointer; }
+        .gallery { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 20px; }
+        img { width: 100%; border: 2px solid #555; border-radius: 5px; }
+        .status { padding: 10px; background: #333; margin-top: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Aviso Bot Login</h2>
+        <input type="text" id="username" placeholder="Username / Email">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="startBot()">Start Login Process</button>
+        
+        <div class="status">Status: <span id="status-text">Idle</span></div>
+        
+        <div class="gallery" id="gallery">
+            </div>
+    </div>
 
+    <script>
+        function startBot() {
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+            
+            fetch('/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username: user, password: pass})
+            });
+        }
+
+        // Live Update Loop
+        setInterval(() => {
+            fetch('/status')
+                .then(res => res.json())
+                .then(data => {
+                    document.getElementById('status-text').innerText = data.step;
+                    
+                    const gallery = document.getElementById('gallery');
+                    gallery.innerHTML = ''; // Clear old images
+                    data.images.forEach(src => {
+                        // Cache bust logic to force refresh if image changes
+                        const img = document.createElement('img');
+                        img.src = src + "?t=" + new Date().getTime();
+                        gallery.appendChild(img);
+                    });
+                });
+        }, 2000); // Check every 2 seconds
+    </script>
+</body>
+</html>
