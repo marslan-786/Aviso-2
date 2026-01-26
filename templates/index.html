@@ -3,34 +3,61 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aviso Bot Controller</title>
+    <title>Aviso Bot Controller Pro</title>
     <style>
-        body { font-family: sans-serif; background: #222; color: #fff; padding: 20px; }
-        .container { max-width: 600px; margin: 0 auto; }
-        input { width: 100%; padding: 10px; margin: 10px 0; }
-        button { width: 100%; padding: 10px; background: #28a745; color: white; border: none; cursor: pointer; }
-        .gallery { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 20px; }
-        img { width: 100%; border: 2px solid #555; border-radius: 5px; }
-        .status { padding: 10px; background: #333; margin-top: 10px; border-radius: 5px; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1e1e1e; color: #eee; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: #2d2d2d; padding: 25px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        h2 { text-align: center; color: #4CAF50; }
+        .control-panel { display: grid; gap: 15px; margin-bottom: 20px; }
+        input { width: 100%; padding: 12px; background: #3d3d3d; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;}
+        button { width: 100%; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.3s;}
+        .btn-start { background: #4CAF50; color: white; }
+        .btn-start:hover { background: #45a049; }
+        .btn-code { background: #2196F3; color: white; }
+        .btn-code:hover { background: #0b7dda; }
+        .status-bar { padding: 15px; background: #333; border-radius: 4px; margin-bottom: 20px; font-family: monospace; border-left: 5px solid #4CAF50; }
+        
+        /* Hidden by default */
+        #code-section { display: none; background: #3a3a2c; padding: 15px; border-radius: 4px; border: 2px solid #FFC107; }
+        
+        .gallery { display: flex; flex-direction: column; gap: 15px; }
+        .gallery img { width: 100%; border: 3px solid #555; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>Aviso Bot Login</h2>
-        <input type="text" id="username" placeholder="Username / Email">
-        <input type="password" id="password" placeholder="Password">
-        <button onclick="startBot()">Start Login Process</button>
+        <h2>Aviso Bot Controller</h2>
         
-        <div class="status">Status: <span id="status-text">Idle</span></div>
+        <div class="control-panel">
+            <input type="text" id="username" placeholder="Username / Email">
+            <input type="password" id="password" placeholder="Password">
+            <button class="btn-start" onclick="startBot()" id="startBtn">Start Login Process</button>
+        </div>
+
+        <div id="code-section" class="control-panel">
+            <h3>⚠️ Email Code Required!</h3>
+            <p>Please check your email and enter the code below:</p>
+            <input type="text" id="email-code" placeholder="Enter Verification Code">
+            <button class="btn-code" onclick="submitCode()">Submit Code</button>
+        </div>
+        
+        <div class="status-bar">Status: <span id="status-text">Idle</span></div>
         
         <div class="gallery" id="gallery">
             </div>
     </div>
 
     <script>
+        // یہ سیٹ یاد رکھے گا کہ کون سی تصاویر دکھائی جا چکی ہیں
+        const displayedImages = new Set();
+
         function startBot() {
             const user = document.getElementById('username').value;
             const pass = document.getElementById('password').value;
+            if(!user || !pass) { alert("Please enter username and password"); return; }
+            
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('startBtn').innerText = "Running...";
             
             fetch('/start', {
                 method: 'POST',
@@ -39,23 +66,65 @@
             });
         }
 
+        function submitCode() {
+            const code = document.getElementById('email-code').value;
+            if(!code) { alert("Please enter the code first"); return; }
+            
+            fetch('/submit_code', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({code: code})
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Code submitted:", data);
+                // ان پٹ کو صاف اور چھپا دیں
+                document.getElementById('email-code').value = '';
+                document.getElementById('code-section').style.display = 'none';
+            });
+        }
+
         // Live Update Loop
         setInterval(() => {
             fetch('/status')
                 .then(res => res.json())
                 .then(data => {
+                    // اسٹیٹس اپ ڈیٹ کریں
                     document.getElementById('status-text').innerText = data.step;
                     
+                    // کوڈ سیکشن کو دکھائیں یا چھپائیں
+                    const codeSection = document.getElementById('code-section');
+                    if (data.needs_code && codeSection.style.display !== 'block') {
+                        codeSection.style.display = 'block';
+                        // ایک بار الرٹ بھی دے سکتے ہیں (اختیاری)
+                        // alert("Code required! Check your email.");
+                    } else if (!data.needs_code && codeSection.style.display === 'block') {
+                         codeSection.style.display = 'none';
+                    }
+
+                    // گیلری کو بغیر ریفریش کیے اپ ڈیٹ کریں
                     const gallery = document.getElementById('gallery');
-                    gallery.innerHTML = ''; // Clear old images
-                    data.images.forEach(src => {
-                        // Cache bust logic to force refresh if image changes
-                        const img = document.createElement('img');
-                        img.src = src + "?t=" + new Date().getTime();
-                        gallery.appendChild(img);
+                    data.images.forEach(filename => {
+                        // اگر یہ تصویر پہلے نہیں دیکھی، تب ہی ایڈ کریں
+                        if (!displayedImages.has(filename)) {
+                            const img = document.createElement('img');
+                            // کیشے سے بچنے کے لیے ٹائم اسٹیمپ لگائیں
+                            img.src = `/static/screenshots/${filename}?t=${new Date().getTime()}`;
+                            gallery.appendChild(img);
+                            // سیٹ میں شامل کریں تاکہ دوبارہ ایڈ نہ ہو
+                            displayedImages.add(filename);
+                            // آخری تصویر پر اسکرول کریں
+                            img.scrollIntoView({ behavior: 'smooth' });
+                        }
                     });
-                });
-        }, 2000); // Check every 2 seconds
+                    
+                    if (!data.is_running && document.getElementById('startBtn').disabled) {
+                         document.getElementById('startBtn').disabled = false;
+                         document.getElementById('startBtn').innerText = "Start Login Process";
+                    }
+                })
+                .catch(err => console.error("Status fetch error:", err));
+        }, 2000); // ہر 2 سیکنڈ بعد چیک کریں
     </script>
 </body>
 </html>
