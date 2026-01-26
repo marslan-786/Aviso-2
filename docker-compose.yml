@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  aviso-bot:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./aviso_data:/app/browser_data  # یہ ہے وہ جادوئی فولڈر جہاں لاگ ان سیو ہوگا
+      - ./static/screenshots:/app/static/screenshots # اسکرین شاٹس باہر بھی نظر آئیں
+    environment:
+      - PYTHONUNBUFFERED=1
