@@ -22,20 +22,12 @@ bot_status = {
     "needs_code": False
 }
 
-def force_google_translate_click(page):
-    try:
-        translate_bar_btn = "#google_translate_element a.goog-te-menu-value"
-        if page.is_visible(translate_bar_btn):
-            page.click(translate_bar_btn)
-            time.sleep(2)
-    except:
-        pass
-
 def take_screenshot(page, name):
     try:
         timestamp = int(time.time())
         filename = f"{timestamp}_{name}.png"
         path = os.path.join(SCREENSHOT_DIR, filename)
+        # full_page=False کیونکہ ہمیں صرف نظر آنے والا حصہ چاہیے
         page.screenshot(path=path)
         bot_status["images"].append(filename)
     except Exception as e:
@@ -47,30 +39,24 @@ def get_best_task_via_js(page):
         const tasks = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
         const data = tasks.map(task => {
             const idPart = task.id.replace('ads-link-', '');
-            
-            // Check if it's a video task (class ybprosm)
             const isVideo = task.querySelector('.ybprosm') !== null;
             if (!isVideo) return null;
 
-            // Get Timer
-            const timerInput = document.getElementById('ads_timer_' + idPart);
-            const duration = timerInput ? parseInt(timerInput.value) : 20;
-
-            // Get Price
+            const timerId = 'timer_ads_' + idPart;
             const priceEl = task.querySelector('span[title="Стоимость просмотра"]');
             const price = priceEl ? parseFloat(priceEl.innerText) : 0;
 
             return {
                 id: idPart,
-                duration: duration,
                 price: price,
+                timerId: timerId,
                 tableId: task.id,
                 startSelector: '#link_ads_start_' + idPart,
-                confirmSelector: '#ads_btn_confirm_' + idPart
+                confirmSelector: '#ads_btn_confirm_' + idPart,
+                errorSelector: '#btn_error_view_' + idPart
             };
         }).filter(item => item !== null);
 
-        // Sort by Price High to Low
         data.sort((a, b) => b.price - a.price);
         return data.length > 0 ? data[0] : null;
     }""")
@@ -80,14 +66,14 @@ def process_youtube_tasks(context, page):
     bot_status["step"] = "Opening Tasks Page..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
-    take_screenshot(page, "0_Main_List")
+    
+    # Remove AdBlock warning if exists
+    page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
 
-    for i in range(1, 21): # Do 20 tasks
+    for i in range(1, 25): 
         if not bot_status["is_running"]: break
         
         bot_status["step"] = f"Scanning Task #{i}..."
-        
-        # 1. Get Best Task
         task_data = get_best_task_via_js(page)
         
         if not task_data:
@@ -96,18 +82,15 @@ def process_youtube_tasks(context, page):
             time.sleep(5)
             continue
             
-        print(f"TASK FOUND: ID={task_data['id']}, Time={task_data['duration']}s")
-        bot_status["step"] = f"Task #{i}: {task_data['duration']}s video found"
+        print(f"TASK FOUND: ID={task_data['id']}")
+        bot_status["step"] = f"Task #{i}: ID {task_data['id']} started"
 
         try:
-            # --- PROOF 1: BEFORE START (RED BORDER) ---
-            # ہم ٹاسک کے گرد لال بارڈر لگائیں گے تاکہ اسکرین شاٹ میں صاف پتہ چلے
-            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '5px solid red';")
+            # Highlight Target (Red Box)
+            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
-            
-            # Screenshot 1: "یہ والا ٹاسک کر رہا ہوں"
-            take_screenshot(page, f"Task_{i}_1_Target_Locked")
+            take_screenshot(page, f"Task_{i}_0_Target_Locked")
 
             # --- ACTION 1: CLICK START ---
             start_selector = task_data['startSelector']
@@ -118,56 +101,80 @@ def process_youtube_tasks(context, page):
             new_page = new_page_info.value
             new_page.wait_for_load_state("domcontentloaded")
             
-            # --- ACTION 2: WATCH VIDEO ---
+            # --- ACTION 2: SMART SYNC WATCHING ---
             new_page.bring_to_front()
+            print("Video tab opened. Syncing...")
             
-            # Timer + Random Buffer
-            actual_wait = task_data['duration'] + random.randint(5, 8)
+            # --- NEW: SCREENSHOTS FOR PROOF ---
+            time.sleep(3) # ویڈیو لوڈ ہونے کا تھوڑا انتظار
             
-            bot_status["step"] = f"Watching Video ({actual_wait}s)..."
+            # 1. ویڈیو پیج کا ثبوت
+            bot_status["step"] = "Capturing Video Page..."
+            take_screenshot(new_page, f"Task_{i}_1_Video_Playing_Proof")
             
-            # Waiting loop
-            remaining = actual_wait
-            while remaining > 0:
+            # 2. مین پیج (ٹائمر) کا ثبوت
+            # ہم فوکس ویڈیو پیج پر ہی رکھیں گے، لیکن تصویر بیک گراؤنڈ پیج کی لیں گے
+            bot_status["step"] = "Checking Timer on Main Page..."
+            take_screenshot(page, f"Task_{i}_2_Timer_Running_Check")
+            
+            # ----------------------------------
+
+            max_wait = 90 # Maximum wait time
+            timer_finished = False
+            
+            for tick in range(max_wait):
                 if not bot_status["is_running"]: 
                     new_page.close()
                     return
-                time.sleep(1)
-                remaining -= 1
-            
-            new_page.close()
-            
-            # --- ACTION 3: CONFIRM ---
-            page.bring_to_front()
-            bot_status["step"] = "Confirming Task..."
-            
-            # Wait for button visibility
-            confirm_selector = task_data['confirmSelector']
-            
-            # Retry finding button loop
-            btn_found = False
-            for _ in range(5):
-                if page.is_visible(confirm_selector):
-                    btn_found = True
+                
+                # Mouse Movement on Video Page
+                try:
+                    new_page.mouse.move(random.randint(100, 500), random.randint(100, 500))
+                except: pass
+
+                # Check Status on Main Page (Background)
+                status_check = page.evaluate(f"""() => {{
+                    const btn = document.querySelector('{task_data['confirmSelector']}');
+                    const err = document.querySelector('{task_data['errorSelector']}');
+                    
+                    if (err && err.offsetParent !== null) return {{ status: 'error', text: err.innerText }};
+                    if (btn && btn.offsetParent !== null) return {{ status: 'done' }};
+                    return {{ status: 'waiting' }};
+                }}""")
+
+                if status_check['status'] == 'error':
+                    print(f"Error detected: {status_check['text']}")
+                    take_screenshot(page, f"Task_{i}_ErrorMsg")
+                    break 
+                
+                if status_check['status'] == 'done':
+                    print("Timer finished! Confirm button visible.")
+                    timer_finished = True
                     break
+                
                 time.sleep(1)
+                if tick % 5 == 0: bot_status["step"] = f"Watching... {tick}s elapsed"
+
+            # --- ACTION 3: CLOSE & CONFIRM ---
+            new_page.close()
+            page.bring_to_front()
             
-            if btn_found:
-                page.click(confirm_selector)
-                print("Confirm clicked!")
+            if timer_finished:
+                bot_status["step"] = "Clicking Confirm..."
                 
-                bot_status["step"] = "Waiting for money message..."
-                time.sleep(5) # Wait for success message animation
+                # کنفرم بٹن پر کلک کرنے سے پہلے ایک اور ثبوت
+                take_screenshot(page, f"Task_{i}_3_Confirm_Button_Ready")
                 
-                # --- PROOF 2: AFTER SUCCESS ---
-                # Screenshot 2: "پیسے مل گئے"
-                take_screenshot(page, f"Task_{i}_2_Money_Added")
+                page.click(task_data['confirmSelector'])
+                time.sleep(4) # پیسے ایڈ ہونے کا انتظار
                 
-                bot_status["step"] = f"Task #{i} Completed Successfully!"
+                # فائنل ثبوت
+                take_screenshot(page, f"Task_{i}_4_Money_Added_Success")
+                bot_status["step"] = f"Task #{i} Completed! Money Added."
             else:
-                print("Confirm button missing")
-                take_screenshot(page, f"Task_{i}_Error_NoButton")
-                page.reload() # Refresh to fix glitches
+                print("Task timed out")
+                bot_status["step"] = "Task Timeout/Skipped"
+                page.reload()
 
         except Exception as e:
             print(f"Task failed: {e}")
@@ -189,24 +196,26 @@ def run_aviso_login(username, password):
             context = p.chromium.launch_persistent_context(
                 USER_DATA_DIR,
                 headless=True,
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 args=[
                     "--lang=en-US",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
-                    "--start-maximized"
+                    "--start-maximized",
+                    "--disable-blink-features=AutomationControlled"
                 ],
-                viewport={"width": 1280, "height": 800}
+                viewport={"width": 1366, "height": 768}
             )
             
             page = context.new_page()
             
-            bot_status["step"] = "Checking Login..."
+            bot_status["step"] = "Opening Site..."
             page.goto("https://aviso.bz/tasks-youtube", timeout=60000)
             page.wait_for_load_state("networkidle")
             
             if "login" in page.url:
-                print("Need login...")
+                print("Logging in...")
                 page.goto("https://aviso.bz/login")
                 page.fill("input[name='username']", username)
                 page.fill("input[name='password']", password)
@@ -225,13 +234,13 @@ def run_aviso_login(username, password):
                     page.locator("input[name='code']").press("Enter")
                     time.sleep(8)
             
-            take_screenshot(page, "Ready_To_Start")
+            take_screenshot(page, "Dashboard_Ready")
             process_youtube_tasks(context, page)
 
         except Exception as e:
             bot_status["step"] = f"Error: {str(e)}"
             print(f"Critical: {e}")
-            try: take_screenshot(page, "error_state")
+            try: take_screenshot(page, "critical_error")
             except: pass
         
         finally:
