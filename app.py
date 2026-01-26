@@ -4,6 +4,7 @@ import json
 import threading
 import random
 from flask import Flask, render_template, request, jsonify
+from playwright_stealth import stealth_sync
 
 app = Flask(__name__)
 
@@ -27,7 +28,6 @@ def take_screenshot(page, name):
         timestamp = int(time.time())
         filename = f"{timestamp}_{name}.png"
         path = os.path.join(SCREENSHOT_DIR, filename)
-        # full_page=False کیونکہ ہمیں صرف نظر آنے والا حصہ چاہیے
         page.screenshot(path=path)
         bot_status["images"].append(filename)
     except Exception as e:
@@ -61,13 +61,37 @@ def get_best_task_via_js(page):
         return data.length > 0 ? data[0] : null;
     }""")
 
+# --- NEW: HANDLE INTERMEDIATE PAGES ---
+def handle_intermediate_pages(new_page):
+    """
+    یہ فنکشن ویڈیو تک پہنچنے کے راستے میں آنے والے بٹنوں کو ہینڈل کرے گا۔
+    """
+    print("Checking for intermediate buttons...")
+    
+    # 3 بار کوشش کریں (اگر ملٹیپل پیجز ہوں)
+    for _ in range(3):
+        try:
+            # کیا کوئی بڑا "Start Watching" یا "Play" بٹن ہے؟
+            # Aviso اکثر 'Приступить к просмотру' (Start watching) کا بٹن دیتا ہے
+            start_btn = new_page.locator("a.tr_but_b, button.video-btn, text='Приступить к просмотру'")
+            
+            if start_btn.count() > 0 and start_btn.first.is_visible():
+                print("Intermediate button found! Clicking...")
+                start_btn.first.click()
+                time.sleep(3) # اگلے پیج کا انتظار
+            else:
+                print("No intermediate button found (Direct video?).")
+                break # اگر بٹن نہیں ہے تو شاید ہم ویڈیو پر پہنچ گئے ہیں
+        except:
+            break
+
 # --- PROCESS LOGIC ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Opening Tasks Page..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
-    # Remove AdBlock warning if exists
+    # Remove AdBlock warning
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
 
     for i in range(1, 25): 
@@ -86,40 +110,56 @@ def process_youtube_tasks(context, page):
         bot_status["step"] = f"Task #{i}: ID {task_data['id']} started"
 
         try:
-            # Highlight Target (Red Box)
+            # Highlight Target
             page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_0_Target_Locked")
 
-            # --- ACTION 1: CLICK START ---
+            # --- ACTION 1: CLICK MAIN LINK ---
             start_selector = task_data['startSelector']
             
             with context.expect_page() as new_page_info:
                 page.click(start_selector)
             
             new_page = new_page_info.value
+            stealth_sync(new_page) # Stealth Mode Apply
             new_page.wait_for_load_state("domcontentloaded")
-            
-            # --- ACTION 2: SMART SYNC WATCHING ---
             new_page.bring_to_front()
-            print("Video tab opened. Syncing...")
             
-            # --- NEW: SCREENSHOTS FOR PROOF ---
-            time.sleep(3) # ویڈیو لوڈ ہونے کا تھوڑا انتظار
+            # --- ACTION 1.5: HANDLE INTERMEDIATE STEPS ---
+            # اگر ڈائریکٹ ویڈیو نہیں کھلی اور کوئی بٹن دبانا ہے تو یہ فنکشن کرے گا
+            handle_intermediate_pages(new_page)
             
-            # 1. ویڈیو پیج کا ثبوت
-            bot_status["step"] = "Capturing Video Page..."
-            take_screenshot(new_page, f"Task_{i}_1_Video_Playing_Proof")
+            # --- CAPTCHA CHECK (WAIT INSTEAD OF SKIP) ---
+            time.sleep(3)
+            take_screenshot(new_page, f"Task_{i}_1_Page_Opened")
             
-            # 2. مین پیج (ٹائمر) کا ثبوت
-            # ہم فوکس ویڈیو پیج پر ہی رکھیں گے، لیکن تصویر بیک گراؤنڈ پیج کی لیں گے
-            bot_status["step"] = "Checking Timer on Main Page..."
-            take_screenshot(page, f"Task_{i}_2_Timer_Running_Check")
-            
-            # ----------------------------------
+            is_captcha = new_page.evaluate("""() => {
+                return document.title.includes("hCaptcha") || 
+                       document.body.innerText.includes("hCaptcha") ||
+                       document.querySelector('iframe[src*="hcaptcha"]') !== null;
+            }""")
 
-            max_wait = 90 # Maximum wait time
+            if is_captcha:
+                print("🚨 CAPTCHA DETECTED!")
+                bot_status["step"] = "⚠️ Captcha Detected! Waiting 60s..."
+                take_screenshot(new_page, f"Task_{i}_CAPTCHA_WAIT")
+                
+                # ہم 60 سیکنڈ انتظار کریں گے شاید یہ خود حل ہو جائے یا اگلی بار نہ آئے
+                # (اگر آپ مینولی سولو کر سکتے ہیں تو اس دوران کر لیں)
+                time.sleep(60)
+                
+                # دوبارہ چیک کریں
+                is_captcha_still = new_page.evaluate("() => document.querySelector('iframe[src*=\"hcaptcha\"]') !== null")
+                if is_captcha_still:
+                    print("Captcha still there. Closing tab.")
+                    new_page.close()
+                    continue
+
+            # --- ACTION 2: SYNC WATCHING ---
+            print("Syncing timer...")
+            max_wait = 120 # زیادہ ٹائم دیں کیونکہ درمیانی سٹیپس بھی ہو سکتے ہیں
             timer_finished = False
             
             for tick in range(max_wait):
@@ -127,12 +167,11 @@ def process_youtube_tasks(context, page):
                     new_page.close()
                     return
                 
-                # Mouse Movement on Video Page
-                try:
-                    new_page.mouse.move(random.randint(100, 500), random.randint(100, 500))
+                # Mouse Simulation
+                try: new_page.mouse.move(random.randint(100, 500), random.randint(100, 500))
                 except: pass
 
-                # Check Status on Main Page (Background)
+                # Check Main Page Status
                 status_check = page.evaluate(f"""() => {{
                     const btn = document.querySelector('{task_data['confirmSelector']}');
                     const err = document.querySelector('{task_data['errorSelector']}');
@@ -143,12 +182,12 @@ def process_youtube_tasks(context, page):
                 }}""")
 
                 if status_check['status'] == 'error':
-                    print(f"Error detected: {status_check['text']}")
+                    print(f"Error: {status_check['text']}")
                     take_screenshot(page, f"Task_{i}_ErrorMsg")
                     break 
                 
                 if status_check['status'] == 'done':
-                    print("Timer finished! Confirm button visible.")
+                    print("Timer finished!")
                     timer_finished = True
                     break
                 
@@ -161,23 +200,21 @@ def process_youtube_tasks(context, page):
             
             if timer_finished:
                 bot_status["step"] = "Clicking Confirm..."
-                
-                # کنفرم بٹن پر کلک کرنے سے پہلے ایک اور ثبوت
-                take_screenshot(page, f"Task_{i}_3_Confirm_Button_Ready")
+                take_screenshot(page, f"Task_{i}_2_Confirm_Ready")
                 
                 page.click(task_data['confirmSelector'])
-                time.sleep(4) # پیسے ایڈ ہونے کا انتظار
+                time.sleep(4)
                 
-                # فائنل ثبوت
-                take_screenshot(page, f"Task_{i}_4_Money_Added_Success")
-                bot_status["step"] = f"Task #{i} Completed! Money Added."
+                take_screenshot(page, f"Task_{i}_3_Success")
+                bot_status["step"] = f"Task #{i} Completed!"
             else:
-                print("Task timed out")
-                bot_status["step"] = "Task Timeout/Skipped"
+                bot_status["step"] = "Task Timeout/Fail"
                 page.reload()
 
         except Exception as e:
             print(f"Task failed: {e}")
+            try: new_page.close() 
+            except: pass
             page.reload()
             time.sleep(5)
 
@@ -193,22 +230,26 @@ def run_aviso_login(username, password):
 
     with sync_playwright() as p:
         try:
+            # --- STEALTH LAUNCH ---
             context = p.chromium.launch_persistent_context(
                 USER_DATA_DIR,
                 headless=True,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                 args=[
                     "--lang=en-US",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--start-maximized",
-                    "--disable-blink-features=AutomationControlled"
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars",
+                    "--mute-audio"
                 ],
                 viewport={"width": 1366, "height": 768}
             )
             
             page = context.new_page()
+            stealth_sync(page) # Stealth Main Page
             
             bot_status["step"] = "Opening Site..."
             page.goto("https://aviso.bz/tasks-youtube", timeout=60000)
