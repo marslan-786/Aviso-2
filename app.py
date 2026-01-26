@@ -8,8 +8,6 @@ from flask import Flask, render_template, request, jsonify
 app = Flask(__name__)
 
 # --- Configuration ---
-# Flask خود بخود 'static' فولڈر کو پہچانتا ہے۔
-# ہم تصاویر اسی کے اندر محفوظ کریں گے۔
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 USER_DATA_DIR = "/app/browser_data"
@@ -42,15 +40,13 @@ def take_screenshot(page, name):
         filename = f"{timestamp}_{name}.png"
         path = os.path.join(SCREENSHOT_DIR, filename)
         page.screenshot(path=path)
-        # ہم صرف فائل کا نام لسٹ میں ڈالیں گے
-        # فرنٹ اینڈ خود اس کے ساتھ /static/screenshots/ لگا لے گا
         bot_status["images"].append(filename)
     except Exception as e:
         print(f"Screenshot failed: {e}")
 
 def run_aviso_login(username, password):
     global bot_status, shared_data
-    from playwright.sync_api import sync_playwright # Import inside thread
+    from playwright.sync_api import sync_playwright
 
     bot_status["is_running"] = True
     bot_status["needs_code"] = False
@@ -82,7 +78,7 @@ def run_aviso_login(username, password):
             take_screenshot(page, "homepage")
 
             # --- Step 2: Login Check ---
-            # چیک کریں کہ کیا لاگ ان بٹن موجود ہے؟
+            # Check selectors (English, Russian, or Link)
             if page.is_visible("text=Login") or page.is_visible("text=Вход") or page.is_visible("a[href='/login']"):
                 bot_status["step"] = "Going to Login Page..."
                 page.goto("https://aviso.bz/login")
@@ -95,15 +91,15 @@ def run_aviso_login(username, password):
                 take_screenshot(page, "credentials_filled")
 
                 bot_status["step"] = "Submitting Login..."
-                # پاسورڈ فیلڈ میں انٹر پریس کرنا زیادہ محفوظ طریقہ ہے
+                # Press Enter in password field
                 page.locator("input[name='password']").press("Enter")
                 
                 time.sleep(5)
                 take_screenshot(page, "after_submission")
 
                 # --- Step 3: Check for 2FA Code ---
-                # مختلف الفاظ جو کوڈ پیج پر ہو سکتے ہیں
-                if page.is_visible("text=Проверочный код") or page.is_visible("text=Security") or page.is_visible("input[name='code']"):
+                # Check for "Code" field visibility using specific Name attribute to avoid Google Translate conflicts
+                if page.is_visible("input[name='code']"):
                     bot_status["step"] = "WAITING_FOR_CODE"
                     bot_status["needs_code"] = True
                     print("2FA Page Detected. Waiting for user input...")
@@ -116,26 +112,35 @@ def run_aviso_login(username, password):
                         wait_count += 2
                         if wait_count % 10 == 0:
                             print(f"Waiting for code... {wait_count}s")
-                        if not bot_status["is_running"]: # اگر یوزر نے روک دیا
+                        if not bot_status["is_running"]:
                             return
 
-                    # کوڈ مل گیا
+                    # Code Received
                     bot_status["step"] = "Code Received! Submitting..."
                     bot_status["needs_code"] = False
                     code_val = shared_data["otp_code"]
 
-                    # کوڈ انٹر کریں
-                    page.fill("input[type='text']", code_val)
+                    # --- FIX IS HERE ---
+                    # ہم اب 'type=text' کی جگہ 'name=code' استعمال کر رہے ہیں جو کہ یونیک ہے۔
+                    page.fill("input[name='code']", code_val)
                     take_screenshot(page, "code_filled")
-                    page.locator("input[type='text']").press("Enter")
+                    
+                    # Enter دبائیں
+                    page.locator("input[name='code']").press("Enter")
+                    
+                    # Backup: اگر انٹر سے کام نہ بنے تو بٹن بھی دبا دو
+                    # میں بٹن کا نام "Войти в аккаунт" ہے
+                    time.sleep(2)
+                    if page.is_visible("button:has-text('Войти в аккаунт')"):
+                         page.click("button:has-text('Войти в аккаунт')")
                     
                     bot_status["step"] = "Code Submitted. Loading Dashboard..."
-                    time.sleep(8)
+                    time.sleep(10) # ڈیش بورڈ لوڈ ہونے کا ٹائم دیں
                     force_google_translate_click(page)
                     take_screenshot(page, "final_dashboard")
                 
                 else:
-                    bot_status["step"] = "No Code Requested. Direct Dashboard?"
+                    bot_status["step"] = "No Code Requested. Checking Dashboard..."
                     force_google_translate_click(page)
                     take_screenshot(page, "direct_dashboard_check")
             
@@ -145,7 +150,6 @@ def run_aviso_login(username, password):
                 take_screenshot(page, "already_logged_in")
 
             # --- Keep Alive ---
-            # براؤزر کو تھوڑی دیر کھلا رکھیں تاکہ سیشن اچھی طرح سیو ہو جائے
             time.sleep(10)
 
         except Exception as e:
@@ -191,9 +195,6 @@ def start_bot():
 @app.route('/status')
 def status():
     return jsonify(bot_status)
-
-# نوٹ: یہاں سے وہ 'serve_screenshot' والا خراب کوڈ ہٹا دیا گیا ہے۔
-# Flask اب خود بخود static فولڈر سے فائلیں اٹھائے گا۔
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
