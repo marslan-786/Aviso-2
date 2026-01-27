@@ -44,7 +44,7 @@ def apply_mobile_stealth(page):
         """)
     except: pass
 
-# --- JS SCANNER ---
+# --- JS SCANNER (Modified: Small Tasks First) ---
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tasks = Array.from(document.querySelectorAll('table[id^="ads-link-"], div[id^="ads-link-"]'));
@@ -70,43 +70,25 @@ def get_best_task_via_js(page):
             };
         }).filter(item => item !== null);
 
-        data.sort((a, b) => b.price - a.price);
+        // --- CHANGE 1: SORT ASCENDING (Smallest First) ---
+        data.sort((a, b) => a.price - b.price); 
+        
         return data.length > 0 ? data[0] : null;
     }""")
 
-# --- NEW: AUTO PLAY VIDEO FUNCTION ---
+# --- AUTO PLAY HELPER ---
 def ensure_video_playing(new_page):
-    """
-    یہ فنکشن ویڈیو پیج پر پلے بٹن ڈھونڈ کر اسے دبائے گا۔
-    """
-    print("Checking for Play Button...")
+    print("Trying to play video...")
     try:
-        # YouTube کے مختلف Play Buttons کے سلیکٹرز
-        # 1. Big Red Button (.ytp-large-play-button)
-        # 2. Generic Mobile Play Button
-        # 3. Iframe Center
-        
-        # پہلے کوشش: بڑا بٹن ڈھونڈو
         play_btn = new_page.locator(".ytp-large-play-button, button[aria-label='Play'], .html5-video-player")
-        
         if play_btn.count() > 0 and play_btn.first.is_visible():
-            print("Play button found! Tapping...")
             play_btn.first.tap()
-            time.sleep(1)
         else:
-            # اگر بٹن نہیں ملا تو شاید ویڈیو iframe میں ہو۔
-            # ہم اسکرین کے بالکل بیچ میں ایک 'Tap' کریں گے (موبائل پر یہ اکثر ویڈیو چلا دیتا ہے)
-            print("Button not found via selector. Trying center tap...")
             viewport = new_page.viewport_size
-            if viewport:
-                x = viewport['width'] / 2
-                y = viewport['height'] / 2
-                new_page.mouse.click(x, y)
-                
-    except Exception as e:
-        print(f"Auto-play error: {e}")
+            if viewport: new_page.mouse.click(viewport['width']/2, viewport['height']/2)
+    except: pass
 
-# --- PROCESS LOGIC ---
+# --- PROCESS LOGIC (Modified: 10s Delay) ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
@@ -128,21 +110,19 @@ def process_youtube_tasks(context, page):
             time.sleep(3)
             task_data = get_best_task_via_js(page)
             if not task_data:
-                print("No tasks available.")
                 bot_status["step"] = "No Tasks. Finished."
                 break
             
-        print(f"Doing Task: {task_data['id']} ({task_data['duration']}s)")
-        bot_status["step"] = f"Task #{i}: Starting..."
+        print(f"Doing Task: {task_data['id']} (Price: {task_data['price']})")
+        bot_status["step"] = f"Task #{i}: {task_data['price']} rub task..."
 
         try:
-            # Highlight Target
+            # Highlight
             page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_1_Target_Locked")
 
-            # Start Task
             start_selector = task_data['startSelector']
             
             with context.expect_page() as new_page_info:
@@ -153,15 +133,16 @@ def process_youtube_tasks(context, page):
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # --- AUTO PLAY LOGIC HERE ---
-            time.sleep(2) # لوڈ ہونے دیں
-            ensure_video_playing(new_page) # <--- ویڈیو پلے کریں
+            # --- CHANGE 2: 10 SECOND WAIT BEFORE CAPTURE ---
+            bot_status["step"] = "Waiting 10s for page load..."
+            print("Waiting 10s for full load...")
+            time.sleep(10) 
             
-            # Screenshot to prove it's playing
-            time.sleep(2)
-            take_screenshot(new_page, f"Task_{i}_2_Video_Playing")
+            # Now take screenshot (Full Loaded)
+            take_screenshot(new_page, f"Task_{i}_2_Video_Page_Loaded")
             
-            # Check Timer on Main Page
+            # Then play video
+            ensure_video_playing(new_page)
             take_screenshot(page, f"Task_{i}_3_Timer_Check")
             
             # Wait Loop
@@ -173,8 +154,7 @@ def process_youtube_tasks(context, page):
                     new_page.close()
                     return
                 
-                # Keep video active
-                try: new_page.touchscreen.tap(200, 200) # Small taps to keep screen active
+                try: new_page.touchscreen.tap(200, 300)
                 except: pass
 
                 status_check = page.evaluate(f"""() => {{
