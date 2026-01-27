@@ -7,9 +7,9 @@
     <style>
         /* --- Hacker / Dark Theme --- */
         body {
-            font-family: 'Courier New', Courier, monospace; /* Tech Font */
+            font-family: 'Courier New', Courier, monospace;
             background-color: #0d0d0d;
-            color: #00ff41; /* Hacker Green */
+            color: #00ff41;
             margin: 0;
             padding: 15px;
             display: flex;
@@ -31,13 +31,11 @@
         h2 {
             text-align: center;
             margin-top: 0;
-            text-transform: uppercase;
-            letter-spacing: 2px;
             border-bottom: 2px solid #333;
             padding-bottom: 10px;
         }
 
-        /* --- Input Fields --- */
+        /* --- Inputs --- */
         input {
             width: 100%;
             padding: 15px;
@@ -64,13 +62,12 @@
             font-weight: bold;
             font-size: 18px;
             text-transform: uppercase;
-            transition: transform 0.1s, opacity 0.2s;
         }
         .btn-start { background: linear-gradient(45deg, #006400, #00ff41); color: black; }
-        .btn-start:active { transform: scale(0.98); }
         .btn-code { background: #ff9800; color: black; margin-top: 5px; }
+        button:disabled { background: #333; color: #888; cursor: not-allowed; }
 
-        /* --- Live Status Box --- */
+        /* --- Live Status --- */
         .status-wrapper {
             margin-top: 20px;
             background: #000;
@@ -79,22 +76,15 @@
             border-radius: 8px;
             text-align: left;
         }
-        .status-label { font-size: 12px; color: #888; }
         .live-status {
             font-size: 16px;
             color: #fff;
             margin-top: 5px;
             font-weight: bold;
-            white-space: pre-wrap; /* For multiline logs */
+            white-space: pre-wrap;
         }
-        
-        /* Blinking cursor effect */
-        .live-status::after {
-            content: "▋";
-            animation: blink 1s infinite;
-            color: #00ff41;
-        }
-        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        .live-status::after { content: "▋"; animation: blink 1s infinite; color: #00ff41; }
+        @keyframes blink { 50% { opacity: 0; } }
 
         /* --- 2FA Section --- */
         #code-area {
@@ -104,50 +94,35 @@
             padding: 15px;
             border-radius: 8px;
             margin-top: 15px;
-            animation: pulse 1.5s infinite alternate;
         }
-        @keyframes pulse { from { box-shadow: 0 0 5px #ffcc00; } to { box-shadow: 0 0 20px #ffcc00; } }
 
-        /* --- Swipe Gallery (Horizontal) --- */
+        /* --- Gallery --- */
         .gallery-label { margin-top: 20px; font-size: 14px; color: #aaa; display: flex; justify-content: space-between; }
         
         .gallery-container {
             display: flex;
-            overflow-x: auto; /* Horizontal Scroll */
+            overflow-x: auto;
             gap: 10px;
             padding: 10px 0;
             scroll-behavior: smooth;
-            -webkit-overflow-scrolling: touch; /* Smooth scroll on mobile */
         }
-
-        /* Hide scrollbar for cleaner look */
         .gallery-container::-webkit-scrollbar { display: none; }
 
         .gallery-container img {
-            height: 180px; /* Fixed height for consistency */
+            height: 180px;
             border-radius: 8px;
             border: 2px solid #333;
-            flex-shrink: 0; /* Prevent shrinking */
+            flex-shrink: 0;
             box-shadow: 0 4px 8px rgba(0,0,0,0.5);
-            transition: transform 0.2s;
         }
-        
-        /* New image animation */
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateX(20px); }
-            to { opacity: 1; transform: translateX(0); }
-        }
-        .gallery-container img.new-img {
-            animation: slideIn 0.5s ease-out;
-            border-color: #00ff41; /* Highlight new image */
-        }
+        .gallery-container img.new-img { border-color: #00ff41; }
 
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h2>🤖 Aviso Bot v4.0</h2>
+        <h2>🤖 Aviso Bot v5.0</h2>
         
         <input type="text" id="username" placeholder="Enter Email / Login">
         <input type="password" id="password" placeholder="Enter Password">
@@ -161,30 +136,43 @@
         </div>
 
         <div class="status-wrapper">
-            <div class="status-label">SYSTEM LOGS:</div>
-            <div id="status-text" class="live-status">Waiting for command...</div>
+            <div style="font-size: 12px; color: #888;">LIVE STATUS:</div>
+            <div id="status-text" class="live-status">Initializing...</div>
         </div>
 
         <div class="gallery-label">
-            <span>LIVE FEED (Max 10)</span>
+            <span>LIVE FEED</span>
             <span>Swipe ⮕</span>
         </div>
-        <div class="gallery-container" id="gallery">
-            </div>
+        <div class="gallery-container" id="gallery"></div>
     </div>
 
     <script>
         const displayedImages = new Set();
-        const MAX_IMAGES = 10; // صرف 10 تصاویر رکھیں گے
+        const MAX_IMAGES = 10;
+
+        // --- 1. WINDOW LOAD: Restore Data & Fetch Status Immediately ---
+        window.onload = function() {
+            // LocalStorage سے پرانا پاسورڈ اٹھائیں
+            const savedUser = localStorage.getItem('aviso_user');
+            const savedPass = localStorage.getItem('aviso_pass');
+
+            if (savedUser) document.getElementById('username').value = savedUser;
+            if (savedPass) document.getElementById('password').value = savedPass;
+
+            // فوراً اسٹیٹس چیک کریں (انتظار کیے بغیر)
+            pollStatus();
+        };
 
         function startBot() {
             const u = document.getElementById('username').value;
             const p = document.getElementById('password').value;
             
-            if(!u || !p) {
-                alert("❌ Error: Please enter both Username and Password.");
-                return;
-            }
+            if(!u || !p) { alert("❌ Please enter details first."); return; }
+
+            // --- SAVE TO BROWSER MEMORY ---
+            localStorage.setItem('aviso_user', u);
+            localStorage.setItem('aviso_pass', p);
 
             fetch('/start', {
                 method: 'POST',
@@ -192,11 +180,7 @@
                 body: JSON.stringify({username: u, password: p})
             });
             
-            const btn = document.getElementById('startBtn');
-            btn.disabled = true;
-            btn.innerHTML = "⏳ RUNNING...";
-            btn.style.background = "#333";
-            btn.style.color = "#888";
+            updateBtnState(true);
         }
 
         function submitCode() {
@@ -213,66 +197,67 @@
             document.getElementById('code-area').style.display = "none";
         }
 
-        // Live Polling every 1 second for "Real-time" feel
-        setInterval(() => {
+        function updateBtnState(isRunning) {
+            const btn = document.getElementById('startBtn');
+            if (isRunning) {
+                btn.disabled = true;
+                btn.innerHTML = "⏳ SYSTEM RUNNING...";
+                btn.style.background = "#333";
+                btn.style.color = "#888";
+            } else {
+                btn.disabled = false;
+                btn.innerHTML = "🚀 START SYSTEM";
+                btn.style.background = "linear-gradient(45deg, #006400, #00ff41)";
+                btn.style.color = "black";
+            }
+        }
+
+        // --- POLLING FUNCTION (Called periodically) ---
+        function pollStatus() {
             fetch('/status').then(r => r.json()).then(data => {
-                // 1. Update Status Text
+                // 1. Update Text
                 const statusEl = document.getElementById('status-text');
-                // Avoid replacing text if it hasn't changed (to prevent flickering cursor)
-                if (statusEl.innerText !== data.step) {
-                    statusEl.innerText = data.step;
-                }
+                if (statusEl.innerText !== data.step) statusEl.innerText = data.step;
 
-                // 2. Handle Code Input
+                // 2. Update Button State based on Backend
+                // اگر بیک اینڈ چل رہا ہے تو بٹن ڈس ایبل رکھیں، ورنہ ان ایبل کر دیں
+                updateBtnState(data.is_running);
+
+                // 3. Handle Code
                 const codeDiv = document.getElementById('code-area');
-                if (data.needs_code && codeDiv.style.display !== 'block') {
-                    codeDiv.style.display = 'block';
-                    // Play notification sound logic could go here
-                } else if (!data.needs_code && codeDiv.style.display === 'block') {
-                    codeDiv.style.display = 'none';
-                }
+                if (data.needs_code) codeDiv.style.display = 'block';
+                else codeDiv.style.display = 'none';
 
-                // 3. Handle Swipe Gallery
+                // 4. Handle Gallery (Persistence Logic)
                 const gallery = document.getElementById('gallery');
                 
+                // بیک اینڈ سے آئی ہوئی ساری تصاویر چیک کریں
                 data.images.forEach(imgName => {
+                    // اگر یہ تصویر پہلے سے موجود نہیں ہے، تب ہی ایڈ کریں
                     if (!displayedImages.has(imgName)) {
-                        // Create Image
                         const img = document.createElement('img');
-                        // Add cache-busting just in case
                         img.src = `/static/screenshots/${imgName}`; 
                         img.classList.add("new-img");
-                        
-                        // Click to open full size
                         img.onclick = function() { window.open(this.src, '_blank'); };
 
-                        // Append to end (Right side)
                         gallery.appendChild(img);
                         displayedImages.add(imgName);
 
-                        // FIFO Logic: Remove first child if > 10
+                        // FIFO Logic (Max 10)
                         if (gallery.children.length > MAX_IMAGES) {
-                            // Remove from DOM
                             gallery.removeChild(gallery.firstElementChild);
-                            // Note: We don't remove from 'displayedImages' Set 
-                            // to ensure we don't re-add the old image if backend still sends it.
                         }
-
-                        // Auto-scroll to the right (Show newest)
+                        
+                        // Auto Scroll
                         gallery.scrollLeft = gallery.scrollWidth;
                     }
                 });
+            }).catch(e => console.log("Waiting for backend..."));
+        }
 
-                // Reset Button if stopped
-                if (!data.is_running && document.getElementById('startBtn').disabled) {
-                     const btn = document.getElementById('startBtn');
-                     btn.disabled = false;
-                     btn.innerHTML = "🚀 START SYSTEM";
-                     btn.style.background = "linear-gradient(45deg, #006400, #00ff41)";
-                     btn.style.color = "black";
-                }
-            }).catch(e => console.log("Connection waiting..."));
-        }, 1000); // 1000ms = 1 Second Refresh Rate
+        // ہر 1 سیکنڈ بعد اپ ڈیٹ کریں
+        setInterval(pollStatus, 1000);
+
     </script>
 
 </body>
