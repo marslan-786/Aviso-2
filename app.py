@@ -31,7 +31,7 @@ def take_screenshot(page, name):
         bot_status["images"].append(filename)
     except: pass
 
-# --- MOBILE STEALTH ---
+# --- MOBILE STEALTH (Redmi 14C) ---
 def apply_mobile_stealth(page):
     try:
         page.add_init_script("""
@@ -41,17 +41,24 @@ def apply_mobile_stealth(page):
         """)
     except: pass
 
-# --- JS SCANNER ---
-def get_best_task_via_js(page):
+# --- ADVANCED JS SCANNER ---
+def get_all_tasks_via_js(page):
     return page.evaluate("""() => {
+        // تمام ٹاسک ٹیبلز کو اٹھائیں
         const tasks = Array.from(document.querySelectorAll('table[id^="ads-link-"], div[id^="ads-link-"]'));
+        
         const data = tasks.map(task => {
             const idPart = task.id.replace('ads-link-', '');
+            
+            // چیک کریں کہ کیا یہ ویڈیو ہے (ybprosm کلاس)
             const isVideo = task.querySelector('.ybprosm') !== null;
             if (!isVideo) return null;
 
+            // ٹائمر کی ویلیو html سے نکالیں (آپ کے دیے گئے کوڈ کے مطابق)
             const timerInput = document.getElementById('ads_timer_' + idPart);
-            const duration = timerInput ? parseInt(timerInput.value) : 15;
+            const duration = timerInput ? parseInt(timerInput.value) : 20;
+
+            // پرائس نکالیں
             const priceEl = task.querySelector('span[title="Стоимость просмотра"], .price-text');
             const price = priceEl ? parseFloat(priceEl.innerText) : 0;
 
@@ -62,129 +69,159 @@ def get_best_task_via_js(page):
                 tableId: task.id,
                 startSelector: '#link_ads_start_' + idPart,
                 confirmSelector: '#ads_btn_confirm_' + idPart,
-                errorSelector: '#btn_error_view_' + idPart
+                errorSelector: '#btn_error_view_' + idPart,
+                wrapperSelector: '#ads_checking_btn_' + idPart // یہ وہ div ہے جو display:none ہوتا ہے
             };
         }).filter(item => item !== null);
 
-        data.sort((a, b) => a.price - b.price); // Smallest First
-        return data.length > 0 ? data[0] : null;
+        // ترتیب: پہلے چھوٹے ٹاسک، پھر بڑے۔
+        data.sort((a, b) => a.duration - b.duration);
+        return data;
     }""")
 
-# --- AUTO PLAY ---
+# --- AUTO PLAY HELPER ---
 def ensure_video_playing(new_page):
     try:
-        play_btn = new_page.locator(".ytp-large-play-button, button[aria-label='Play']")
-        if play_btn.count() > 0 and play_btn.first.is_visible():
+        # YouTube Mobile Play Button
+        play_btn = new_page.locator(".ytp-large-play-button, .html5-video-player")
+        if play_btn.count() > 0:
             play_btn.first.tap()
         else:
+            # Center Tap fallback
             vp = new_page.viewport_size
             if vp: new_page.mouse.click(vp['width']/2, vp['height']/2)
     except: pass
 
-# --- PROCESS LOGIC ---
+# --- PROCESS TASKS ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
+    # Remove AdBlock Warning
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
-    take_screenshot(page, "Task_List")
+    
+    take_screenshot(page, "0_List_Loaded")
 
-    tasks_found = False
-    for i in range(1, 31): 
+    # ایک بار میں سارے ٹاسک کی لسٹ لے لیں
+    all_tasks = get_all_tasks_via_js(page)
+    
+    if not all_tasks:
+        print("No tasks found.")
+        bot_status["step"] = "No Tasks Found."
+        return
+
+    print(f"Found {len(all_tasks)} tasks to process.")
+    
+    for i, task_data in enumerate(all_tasks, 1):
         if not bot_status["is_running"]: break
         
-        bot_status["step"] = f"Finding Task #{i}..."
-        task_data = get_best_task_via_js(page)
-        
-        if not task_data:
-            if not tasks_found:
-                print("No tasks available.")
-                bot_status["step"] = "No Tasks Found."
-            else:
-                bot_status["step"] = "All Tasks Done."
-            break
-            
-        tasks_found = True
-        print(f"Task: {task_data['id']} | Time: {task_data['duration']}s")
-        bot_status["step"] = f"Task #{i}: Starting..."
+        bot_status["step"] = f"Task {i}/{len(all_tasks)}: {task_data['duration']}s Video"
+        print(f"Processing Task ID: {task_data['id']} ({task_data['duration']}s)")
 
         try:
-            # Highlight
-            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
+            # 1. Scroll to Task
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
+            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '3px solid red';")
             time.sleep(1)
-            take_screenshot(page, f"Task_{i}_Target")
+            take_screenshot(page, f"Task_{i}_1_Target")
 
-            # Start
+            # 2. Click Start (Open New Tab)
             with context.expect_page() as new_page_info:
                 page.tap(task_data['startSelector'])
             
             new_page = new_page_info.value
-            apply_mobile_stealth(new_page) 
+            apply_mobile_stealth(new_page)
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # Play & Wait
+            # 3. Play Video & Handle Obstacles
             time.sleep(2)
-            # Handle obstacles like VPN warning
             try:
-                blocker = new_page.locator("button:has-text('Я ознакомлен'), a.tr_but_b")
+                blocker = new_page.locator("button:has-text('Я ознакомлен'), a:has-text('Приступить')")
                 if blocker.count() > 0 and blocker.first.is_visible():
                     blocker.first.tap()
                     time.sleep(2)
             except: pass
 
             ensure_video_playing(new_page)
-            take_screenshot(new_page, f"Task_{i}_Video")
+            take_screenshot(new_page, f"Task_{i}_2_Video")
+
+            # 4. SMART WAIT (The Fix)
+            # ہم ٹائمر کا انتظار کریں گے، لیکن ساتھ ساتھ Aviso کے مین پیج کو چیک کرتے رہیں گے
+            # کہ بٹن ظاہر ہوا یا نہیں۔
             
-            # Exact Timer Loop
-            wait_time = task_data['duration'] + 2 
-            timer_finished = False
+            wait_limit = task_data['duration'] + 30 # Buffer time
+            confirm_ready = False
             
-            for tick in range(wait_time + 15): 
+            for sec in range(wait_limit):
                 if not bot_status["is_running"]: 
                     new_page.close()
                     return
+
+                # Keep Video Active
+                try: new_page.touchscreen.tap(100, 200)
+                except: pass
                 
-                status = page.evaluate(f"""() => {{
+                # Check Main Page for Button Visibility
+                # ہم چیک کریں گے کہ کیا کنفرم بٹن اب نظر آ رہا ہے؟
+                is_visible = page.evaluate(f"""() => {{
                     const btn = document.querySelector('{task_data['confirmSelector']}');
-                    if (btn && btn.offsetParent !== null) return 'done';
-                    return 'wait';
+                    const wrapper = document.querySelector('{task_data['wrapperSelector']}');
+                    
+                    // اگر ریپر کا display 'none' نہیں ہے، یا بٹن نظر آ رہا ہے
+                    if (btn && btn.offsetParent !== null) return true;
+                    if (wrapper && wrapper.style.display !== 'none') return true;
+                    return false;
                 }}""")
-                
-                if status == 'done':
-                    timer_finished = True
+
+                if is_visible:
+                    print("Timer Finished! Button is visible.")
+                    confirm_ready = True
                     break
                 
+                if sec % 5 == 0:
+                    bot_status["step"] = f"Watching... {sec}/{task_data['duration']}s"
                 time.sleep(1)
-                if tick % 5 == 0: bot_status["step"] = f"Watching... {tick}/{wait_time}s"
 
+            # 5. Confirm
             new_page.close()
             page.bring_to_front()
             
-            if timer_finished:
-                # Random human delay 5-10s
-                wait_human = random.randint(5, 10)
-                bot_status["step"] = f"Waiting {wait_human}s..."
-                for _ in range(wait_human):
-                    if not bot_status["is_running"]: return
-                    time.sleep(1)
-
+            if confirm_ready:
+                # Human Delay
+                time.sleep(random.randint(2, 4))
+                bot_status["step"] = "Clicking Confirm..."
+                
+                # کلک کریں
                 page.tap(task_data['confirmSelector'])
-                time.sleep(4)
-                take_screenshot(page, f"Task_{i}_Success")
+                
+                # کامیابی کا انتظار
+                time.sleep(5)
+                take_screenshot(page, f"Task_{i}_3_Success")
+                bot_status["step"] = f"Task {i} Done!"
             else:
+                print("Task timed out. Button never appeared.")
+                bot_status["step"] = "Task Failed (Timeout)"
+                # اگر ایک ٹاسک فیل ہو تو پیج ریفریش کر لو تاکہ اگلا صحیح چلے
                 page.reload()
+                time.sleep(5)
+                # ریفریش کے بعد لسٹ دوبارہ لینی پڑے گی، اس لیے لوپ بریک کریں
+                break 
 
         except Exception as e:
-            print(f"Task error: {e}")
+            print(f"Task Failed: {e}")
             try: new_page.close() 
             except: pass
             page.reload()
-            time.sleep(5)
+            break
 
-# --- MAIN LOOP RUNNER ---
+    # --- AUTO LOGOUT ---
+    if bot_status["is_running"]:
+        print("Cycle ending. Logging out...")
+        page.goto("https://aviso.bz/logout")
+
+# --- MAIN RUNNER ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data
     from playwright.sync_api import sync_playwright
@@ -194,10 +231,8 @@ def run_infinite_loop(username, password):
     shared_data["otp_code"] = None
 
     with sync_playwright() as p:
-        # اس لوپ کی وجہ سے بوٹ کبھی بند نہیں ہوگا
         while bot_status["is_running"]:
             try:
-                bot_status["step"] = "Launching Browser..."
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
@@ -212,14 +247,10 @@ def run_infinite_loop(username, password):
                 page = context.new_page()
                 apply_mobile_stealth(page)
                 
-                # 1. Login Logic
                 bot_status["step"] = "Logging In..."
                 page.goto("https://aviso.bz/login", timeout=60000)
                 
-                # Check if already logged in (cookies)
-                if page.url != "https://aviso.bz/login" and not page.is_visible("input[name='username']"):
-                     print("Already logged in.")
-                else:
+                if page.is_visible("input[name='username']"):
                     page.fill("input[name='username']", username)
                     page.fill("input[name='password']", password)
                     btn = page.locator("button[type='submit']")
@@ -241,43 +272,24 @@ def run_infinite_loop(username, password):
                         page.locator("input[name='code']").press("Enter")
                         time.sleep(8)
                         bot_status["needs_code"] = False
-
-                take_screenshot(page, "Login_Done")
                 
-                # 2. Perform Tasks
+                take_screenshot(page, "Login_Success")
                 process_youtube_tasks(context, page)
                 
-                # 3. Logout Logic
-                if bot_status["is_running"]:
-                    bot_status["step"] = "Logging Out..."
-                    page.goto("https://aviso.bz/logout")
-                    time.sleep(3)
-                    take_screenshot(page, "Logged_Out")
-                    
-                    # 4. Wait for 1 Hour (Interruptible)
-                    print("Cycle finished. Waiting 1 hour...")
-                    context.close() # Close browser to save RAM
-                    
-                    wait_seconds = 3600 # 1 Hour
-                    for s in range(wait_seconds):
-                        if not bot_status["is_running"]: 
-                            print("Stop command received.")
-                            return
-                        remaining = wait_seconds - s
-                        # ہر 10 سیکنڈ بعد سٹیٹس اپ ڈیٹ کریں
-                        if s % 10 == 0:
-                            mins = remaining // 60
-                            secs = remaining % 60
-                            bot_status["step"] = f"💤 Sleeping... Next Run in {mins}m {secs}s"
-                        time.sleep(1)
-                else:
-                    context.close()
-                    return
+                context.close()
+                
+                # Sleep Loop
+                print("Waiting 1 hour...")
+                for s in range(3600):
+                    if not bot_status["is_running"]: return
+                    if s % 10 == 0: 
+                        rem = 3600 - s
+                        bot_status["step"] = f"💤 Next Run: {rem // 60}m {rem % 60}s"
+                    time.sleep(1)
 
             except Exception as e:
                 bot_status["step"] = f"Error: {str(e)}"
-                print(f"Cycle crashed: {e}")
-                time.sleep(30) # Error wait
+                time.sleep(30)
 
 # --- ROUTES ---
 @app.route('/')
@@ -291,7 +303,7 @@ def submit_code_api():
 
 @app.route('/start', methods=['POST'])
 def start_bot():
-    if bot_status["is_running"]: return jsonify({"status": "Already Running"})
+    if bot_status["is_running"]: return jsonify({"status": "Running"})
     data = request.json
     t = threading.Thread(target=run_infinite_loop, args=(data.get('username'), data.get('password')))
     t.start()
