@@ -2,129 +2,278 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aviso Bot Controller Pro</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Aviso Bot - Redmi 14C Controller</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1e1e1e; color: #eee; padding: 20px; }
-        .container { max-width: 800px; margin: 0 auto; background: #2d2d2d; padding: 25px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
-        h2 { text-align: center; color: #4CAF50; }
-        .control-panel { display: grid; gap: 15px; margin-bottom: 20px; }
-        input { width: 100%; padding: 12px; background: #3d3d3d; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;}
-        button { width: 100%; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.3s;}
-        .btn-start { background: #4CAF50; color: white; }
-        .btn-start:hover { background: #45a049; }
-        .btn-code { background: #2196F3; color: white; }
-        .btn-code:hover { background: #0b7dda; }
-        .status-bar { padding: 15px; background: #333; border-radius: 4px; margin-bottom: 20px; font-family: monospace; border-left: 5px solid #4CAF50; }
+        /* --- Hacker / Dark Theme --- */
+        body {
+            font-family: 'Courier New', Courier, monospace; /* Tech Font */
+            background-color: #0d0d0d;
+            color: #00ff41; /* Hacker Green */
+            margin: 0;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+            border: 1px solid #333;
+        }
+
+        h2 {
+            text-align: center;
+            margin-top: 0;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 10px;
+        }
+
+        /* --- Input Fields --- */
+        input {
+            width: 100%;
+            padding: 15px;
+            margin: 8px 0;
+            background: #000;
+            border: 1px solid #444;
+            color: white;
+            border-radius: 8px;
+            font-size: 16px;
+            box-sizing: border-box;
+            outline: none;
+            transition: border 0.3s;
+        }
+        input:focus { border-color: #00ff41; }
+
+        /* --- Buttons --- */
+        button {
+            width: 100%;
+            padding: 15px;
+            margin-top: 10px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 18px;
+            text-transform: uppercase;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+        .btn-start { background: linear-gradient(45deg, #006400, #00ff41); color: black; }
+        .btn-start:active { transform: scale(0.98); }
+        .btn-code { background: #ff9800; color: black; margin-top: 5px; }
+
+        /* --- Live Status Box --- */
+        .status-wrapper {
+            margin-top: 20px;
+            background: #000;
+            border: 1px dashed #00ff41;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: left;
+        }
+        .status-label { font-size: 12px; color: #888; }
+        .live-status {
+            font-size: 16px;
+            color: #fff;
+            margin-top: 5px;
+            font-weight: bold;
+            white-space: pre-wrap; /* For multiline logs */
+        }
         
-        /* Hidden by default */
-        #code-section { display: none; background: #3a3a2c; padding: 15px; border-radius: 4px; border: 2px solid #FFC107; }
+        /* Blinking cursor effect */
+        .live-status::after {
+            content: "▋";
+            animation: blink 1s infinite;
+            color: #00ff41;
+        }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+        /* --- 2FA Section --- */
+        #code-area {
+            display: none;
+            background: #2a2000;
+            border: 2px solid #ffcc00;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            animation: pulse 1.5s infinite alternate;
+        }
+        @keyframes pulse { from { box-shadow: 0 0 5px #ffcc00; } to { box-shadow: 0 0 20px #ffcc00; } }
+
+        /* --- Swipe Gallery (Horizontal) --- */
+        .gallery-label { margin-top: 20px; font-size: 14px; color: #aaa; display: flex; justify-content: space-between; }
         
-        .gallery { display: flex; flex-direction: column; gap: 15px; }
-        .gallery img { width: 100%; border: 3px solid #555; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+        .gallery-container {
+            display: flex;
+            overflow-x: auto; /* Horizontal Scroll */
+            gap: 10px;
+            padding: 10px 0;
+            scroll-behavior: smooth;
+            -webkit-overflow-scrolling: touch; /* Smooth scroll on mobile */
+        }
+
+        /* Hide scrollbar for cleaner look */
+        .gallery-container::-webkit-scrollbar { display: none; }
+
+        .gallery-container img {
+            height: 180px; /* Fixed height for consistency */
+            border-radius: 8px;
+            border: 2px solid #333;
+            flex-shrink: 0; /* Prevent shrinking */
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+            transition: transform 0.2s;
+        }
+        
+        /* New image animation */
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .gallery-container img.new-img {
+            animation: slideIn 0.5s ease-out;
+            border-color: #00ff41; /* Highlight new image */
+        }
+
     </style>
 </head>
 <body>
+
     <div class="container">
-        <h2>Aviso Bot Controller</h2>
+        <h2>🤖 Aviso Bot v4.0</h2>
         
-        <div class="control-panel">
-            <input type="text" id="username" placeholder="Username / Email">
-            <input type="password" id="password" placeholder="Password">
-            <button class="btn-start" onclick="startBot()" id="startBtn">Start Login Process</button>
+        <input type="text" id="username" placeholder="Enter Email / Login">
+        <input type="password" id="password" placeholder="Enter Password">
+        
+        <button class="btn-start" id="startBtn" onclick="startBot()">🚀 START SYSTEM</button>
+
+        <div id="code-area">
+            <h3 style="margin:0 0 10px 0; color:#ffcc00;">🔑 Code Required</h3>
+            <input type="text" id="otp-input" placeholder="Type Code Here..." style="text-align: center; letter-spacing: 3px; font-size: 20px;">
+            <button class="btn-code" onclick="submitCode()">Confirm Code</button>
         </div>
 
-        <div id="code-section" class="control-panel">
-            <h3>⚠️ Email Code Required!</h3>
-            <p>Please check your email and enter the code below:</p>
-            <input type="text" id="email-code" placeholder="Enter Verification Code">
-            <button class="btn-code" onclick="submitCode()">Submit Code</button>
+        <div class="status-wrapper">
+            <div class="status-label">SYSTEM LOGS:</div>
+            <div id="status-text" class="live-status">Waiting for command...</div>
         </div>
-        
-        <div class="status-bar">Status: <span id="status-text">Idle</span></div>
-        
-        <div class="gallery" id="gallery">
+
+        <div class="gallery-label">
+            <span>LIVE FEED (Max 10)</span>
+            <span>Swipe ⮕</span>
+        </div>
+        <div class="gallery-container" id="gallery">
             </div>
     </div>
 
     <script>
-        // یہ سیٹ یاد رکھے گا کہ کون سی تصاویر دکھائی جا چکی ہیں
         const displayedImages = new Set();
+        const MAX_IMAGES = 10; // صرف 10 تصاویر رکھیں گے
 
         function startBot() {
-            const user = document.getElementById('username').value;
-            const pass = document.getElementById('password').value;
-            if(!user || !pass) { alert("Please enter username and password"); return; }
+            const u = document.getElementById('username').value;
+            const p = document.getElementById('password').value;
             
-            document.getElementById('startBtn').disabled = true;
-            document.getElementById('startBtn').innerText = "Running...";
-            
+            if(!u || !p) {
+                alert("❌ Error: Please enter both Username and Password.");
+                return;
+            }
+
             fetch('/start', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username: user, password: pass})
+                body: JSON.stringify({username: u, password: p})
             });
+            
+            const btn = document.getElementById('startBtn');
+            btn.disabled = true;
+            btn.innerHTML = "⏳ RUNNING...";
+            btn.style.background = "#333";
+            btn.style.color = "#888";
         }
 
         function submitCode() {
-            const code = document.getElementById('email-code').value;
-            if(!code) { alert("Please enter the code first"); return; }
-            
+            const code = document.getElementById('otp-input').value;
+            if(!code) return;
+
             fetch('/submit_code', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({code: code})
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log("Code submitted:", data);
-                // ان پٹ کو صاف اور چھپا دیں
-                document.getElementById('email-code').value = '';
-                document.getElementById('code-section').style.display = 'none';
             });
+            
+            document.getElementById('otp-input').value = "";
+            document.getElementById('code-area').style.display = "none";
         }
 
-        // Live Update Loop
+        // Live Polling every 1 second for "Real-time" feel
         setInterval(() => {
-            fetch('/status')
-                .then(res => res.json())
-                .then(data => {
-                    // اسٹیٹس اپ ڈیٹ کریں
-                    document.getElementById('status-text').innerText = data.step;
-                    
-                    // کوڈ سیکشن کو دکھائیں یا چھپائیں
-                    const codeSection = document.getElementById('code-section');
-                    if (data.needs_code && codeSection.style.display !== 'block') {
-                        codeSection.style.display = 'block';
-                        // ایک بار الرٹ بھی دے سکتے ہیں (اختیاری)
-                        // alert("Code required! Check your email.");
-                    } else if (!data.needs_code && codeSection.style.display === 'block') {
-                         codeSection.style.display = 'none';
-                    }
+            fetch('/status').then(r => r.json()).then(data => {
+                // 1. Update Status Text
+                const statusEl = document.getElementById('status-text');
+                // Avoid replacing text if it hasn't changed (to prevent flickering cursor)
+                if (statusEl.innerText !== data.step) {
+                    statusEl.innerText = data.step;
+                }
 
-                    // گیلری کو بغیر ریفریش کیے اپ ڈیٹ کریں
-                    const gallery = document.getElementById('gallery');
-                    data.images.forEach(filename => {
-                        // اگر یہ تصویر پہلے نہیں دیکھی، تب ہی ایڈ کریں
-                        if (!displayedImages.has(filename)) {
-                            const img = document.createElement('img');
-                            // کیشے سے بچنے کے لیے ٹائم اسٹیمپ لگائیں
-                            img.src = `/static/screenshots/${filename}?t=${new Date().getTime()}`;
-                            gallery.appendChild(img);
-                            // سیٹ میں شامل کریں تاکہ دوبارہ ایڈ نہ ہو
-                            displayedImages.add(filename);
-                            // آخری تصویر پر اسکرول کریں
-                            img.scrollIntoView({ behavior: 'smooth' });
+                // 2. Handle Code Input
+                const codeDiv = document.getElementById('code-area');
+                if (data.needs_code && codeDiv.style.display !== 'block') {
+                    codeDiv.style.display = 'block';
+                    // Play notification sound logic could go here
+                } else if (!data.needs_code && codeDiv.style.display === 'block') {
+                    codeDiv.style.display = 'none';
+                }
+
+                // 3. Handle Swipe Gallery
+                const gallery = document.getElementById('gallery');
+                
+                data.images.forEach(imgName => {
+                    if (!displayedImages.has(imgName)) {
+                        // Create Image
+                        const img = document.createElement('img');
+                        // Add cache-busting just in case
+                        img.src = `/static/screenshots/${imgName}`; 
+                        img.classList.add("new-img");
+                        
+                        // Click to open full size
+                        img.onclick = function() { window.open(this.src, '_blank'); };
+
+                        // Append to end (Right side)
+                        gallery.appendChild(img);
+                        displayedImages.add(imgName);
+
+                        // FIFO Logic: Remove first child if > 10
+                        if (gallery.children.length > MAX_IMAGES) {
+                            // Remove from DOM
+                            gallery.removeChild(gallery.firstElementChild);
+                            // Note: We don't remove from 'displayedImages' Set 
+                            // to ensure we don't re-add the old image if backend still sends it.
                         }
-                    });
-                    
-                    if (!data.is_running && document.getElementById('startBtn').disabled) {
-                         document.getElementById('startBtn').disabled = false;
-                         document.getElementById('startBtn').innerText = "Start Login Process";
+
+                        // Auto-scroll to the right (Show newest)
+                        gallery.scrollLeft = gallery.scrollWidth;
                     }
-                })
-                .catch(err => console.error("Status fetch error:", err));
-        }, 2000); // ہر 2 سیکنڈ بعد چیک کریں
+                });
+
+                // Reset Button if stopped
+                if (!data.is_running && document.getElementById('startBtn').disabled) {
+                     const btn = document.getElementById('startBtn');
+                     btn.disabled = false;
+                     btn.innerHTML = "🚀 START SYSTEM";
+                     btn.style.background = "linear-gradient(45deg, #006400, #00ff41)";
+                     btn.style.color = "black";
+                }
+            }).catch(e => console.log("Connection waiting..."));
+        }, 1000); // 1000ms = 1 Second Refresh Rate
     </script>
+
 </body>
 </html>
