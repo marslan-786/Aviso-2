@@ -49,7 +49,7 @@ def apply_mobile_stealth(page):
         """)
     except: pass
 
-# --- JS SCANNER (Visual & Active) ---
+# --- JS SCANNER ---
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
@@ -85,36 +85,34 @@ def get_best_task_via_js(page):
         return null; 
     }""")
 
-# --- PURE JS CLICK FUNCTION ---
+# --- PURE JS CLICK (For Tasks Only) ---
 def perform_js_click(page, selector):
     """
-    یہ فنکشن Python کی بجائے براؤزر کے اندر جا کر JS کے ذریعے کلک کرے گا۔
+    صرف ٹاسک کے لیے جاوا اسکرپٹ کلک۔
+    اگر عنصر نہ ملے تو یہ ایرر نہیں دے گا، بس False بتائے گا۔
     """
     try:
         print(f"Executing JS Click on: {selector}")
-        page.evaluate(f"""() => {{
+        result = page.evaluate(f"""() => {{
             const el = document.querySelector('{selector}');
             if (el) {{
                 el.click();
-            }} else {{
-                throw new Error('Element not found: {selector}');
+                return true;
             }}
+            return false;
         }}""")
-        return True
+        return result
     except Exception as e:
         print(f"JS Click Error: {e}")
         return False
 
-# --- JS AUTO PLAY (For Video Page) ---
+# --- VIDEO AUTO PLAY (JS) ---
 def ensure_video_playing_js(new_page):
     try:
-        # ویڈیو پلیئر کے بڑے بٹن کو JS سے کلک کریں
         new_page.evaluate("""() => {
             const playBtn = document.querySelector('.ytp-large-play-button') || document.querySelector('button[aria-label="Play"]');
-            if (playBtn) {
-                playBtn.click();
-            } else {
-                // اگر بٹن نہ ملے تو ویڈیو ایلیمنٹ کو ڈائریکٹ پلے کرو
+            if (playBtn) playBtn.click();
+            else {
                 const video = document.querySelector('video');
                 if (video) video.play();
             }
@@ -158,16 +156,19 @@ def process_youtube_tasks(context, page):
             # --- ACTION 1: JS CLICK START ---
             initial_pages = len(context.pages)
             
-            # Pure JS Click
-            perform_js_click(page, task_data['startSelector'])
+            # ٹاسک شروع کرنے کے لیے JS Click استعمال کریں
+            success = perform_js_click(page, task_data['startSelector'])
             
+            if not success:
+                print("JS Click element not found. Skipping...")
+                page.reload()
+                continue
+
             time.sleep(5) # Wait for tab
 
             # --- VALIDATION ---
             if len(context.pages) == initial_pages:
-                print("JS Click didn't open tab. Retrying once...")
-                time.sleep(2)
-                # ایک بار پھر ٹرائی کریں (Double Tap Strategy)
+                print("Click didn't open tab. Trying once more...")
                 perform_js_click(page, task_data['startSelector'])
                 time.sleep(5)
                 
@@ -185,7 +186,7 @@ def process_youtube_tasks(context, page):
             new_page.bring_to_front()
             
             time.sleep(2)
-            # Handle obstacles (VPN Warning etc) with JS
+            # Handle obstacles (VPN Warning)
             try:
                 new_page.evaluate("""() => {
                     const btn = document.querySelector("button:contains('Я ознакомлен')") || document.querySelector("a.tr_but_b");
@@ -194,7 +195,7 @@ def process_youtube_tasks(context, page):
                 time.sleep(2)
             except: pass
 
-            # --- ACTION 2: JS VIDEO PLAY ---
+            # --- ACTION 2: VIDEO PLAY (JS) ---
             ensure_video_playing_js(new_page)
             take_screenshot(new_page, f"Task_{i}_2_Video_Open")
             
@@ -213,11 +214,11 @@ def process_youtube_tasks(context, page):
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_3_Back_Main")
 
-            # --- ACTION 3: JS CONFIRM ---
+            # --- ACTION 3: CONFIRM (JS) ---
             confirm_selector = task_data['confirmSelector']
             bot_status["step"] = "Waiting for Confirm..."
             
-            # بٹن کے لیے 5 سیکنڈ ویٹ (Visibility Check via JS)
+            # Wait for button visibility logic via JS
             btn_visible = False
             for _ in range(5):
                 visible = page.evaluate(f"""() => {{
@@ -230,7 +231,6 @@ def process_youtube_tasks(context, page):
                 time.sleep(1)
             
             if btn_visible:
-                # Pure JS Click on Confirm
                 perform_js_click(page, confirm_selector)
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_4_Success")
@@ -284,11 +284,18 @@ def run_infinite_loop(username, password):
                 page.goto("https://aviso.bz/login", timeout=60000)
                 
                 if page.is_visible("input[name='username']"):
+                    # --- LOGIN WITH STANDARD PLAYWRIGHT (STABLE) ---
+                    print("Performing Standard Login...")
                     page.fill("input[name='username']", username)
                     page.fill("input[name='password']", password)
                     
-                    # Login Button via JS
-                    page.evaluate("document.querySelector('button[type=\"submit\"]').click()")
+                    # Standard Click Logic
+                    submit_btn = page.locator("button[type='submit'], button:has-text('Войти')")
+                    if submit_btn.count() > 0:
+                        submit_btn.first.click()
+                    else:
+                        page.locator("input[name='password']").press("Enter")
+                    
                     time.sleep(5)
 
                     if page.is_visible("input[name='code']"):
@@ -302,7 +309,14 @@ def run_infinite_loop(username, password):
                                 return
                         
                         page.fill("input[name='code']", shared_data["otp_code"])
-                        page.evaluate("document.querySelector('button[type=\"submit\"]').click()") # JS Click
+                        
+                        # Standard Click for Code
+                        code_btn = page.locator("button[type='submit'], button:has-text('Войти')")
+                        if code_btn.count() > 0:
+                            code_btn.first.click()
+                        else:
+                            page.locator("input[name='code']").press("Enter")
+                            
                         time.sleep(8)
                         bot_status["needs_code"] = False
                 
