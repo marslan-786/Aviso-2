@@ -49,13 +49,13 @@ def apply_mobile_stealth(page):
         """)
     except: pass
 
-# --- JS SCANNER (Visual Only) ---
+# --- JS SCANNER ---
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
         
         for (let table of tables) {
-            // 1. Check Visibility
+            // Visibility Check
             if (table.offsetParent === null) continue;
             const rect = table.getBoundingClientRect();
             if (rect.height === 0 || rect.width === 0) continue; 
@@ -65,11 +65,11 @@ def get_best_task_via_js(page):
 
             const idPart = table.id.replace('ads-link-', '');
             
-            // 2. Video Check
+            // Video Check
             const isVideo = table.querySelector('.ybprosm') !== null;
             if (!isVideo) continue;
 
-            // 3. Extract Data
+            // Data
             const timerInput = document.getElementById('ads_timer_' + idPart);
             const duration = timerInput ? parseInt(timerInput.value) : 20;
             const priceEl = table.querySelector('span[title="Стоимость просмотра"], .price-text');
@@ -80,7 +80,8 @@ def get_best_task_via_js(page):
                 price: price,
                 duration: duration,
                 tableId: table.id,
-                startSelector: '#link_ads_start_' + idPart, // یہ وہ لنک ہے جس پر ٹیپ کرنا ہے
+                // یہ وہ مخصوص ٹیکسٹ والا ایلیمنٹ ہے جس پر کلک کرنا لازمی ہے
+                startSelector: '#link_ads_start_' + idPart, 
                 confirmSelector: '#ads_btn_confirm_' + idPart,
                 errorSelector: '#btn_error_view_' + idPart
             };
@@ -88,25 +89,35 @@ def get_best_task_via_js(page):
         return null; 
     }""")
 
-# --- NEW: HUMAN TOUCH FUNCTION ---
-def perform_human_touch(page, selector):
+# --- NEW: PRECISION TOUCH FUNCTION ---
+def perform_precision_touch(page, selector):
     """
-    یہ فنکشن اصلی انگلی کی طرح اسکرین پر ٹیپ کرے گا۔
+    یہ فنکشن اس بات کی ضمانت دیتا ہے کہ کلک عنصر کے بالکل اندر ہو
     """
     try:
-        # 1. عنصر کی لوکیشن معلوم کریں
+        # عنصر کا باکس نکالو
         box = page.locator(selector).bounding_box()
         if box:
-            # 2. بالکل سینٹر میں نہیں، تھوڑا سا رینڈم (Humanize)
-            x = box['x'] + box['width'] / 2 + random.uniform(-10, 10)
-            y = box['y'] + box['height'] / 2 + random.uniform(-5, 5)
+            # سیفٹی مارجن: صرف درمیان کے 40 فیصد حصے میں کلک کرو
+            # تاکہ کناروں سے باہر جانے کا چانس 0 ہو جائے
+            safe_width = box['width'] * 0.4
+            safe_height = box['height'] * 0.4
             
-            print(f"Touching at coordinates: {x}, {y}")
-            # 3. Touch Event
-            page.touchscreen.tap(x, y)
+            center_x = box['x'] + box['width'] / 2
+            center_y = box['y'] + box['height'] / 2
+            
+            # اب جو رینڈم نمبر لیں گے وہ بہت چھوٹا ہوگا
+            rand_x = random.uniform(-safe_width/2, safe_width/2)
+            rand_y = random.uniform(-safe_height/2, safe_height/2)
+            
+            final_x = center_x + rand_x
+            final_y = center_y + rand_y
+            
+            print(f"Precision Tap at: {final_x:.2f}, {final_y:.2f} (Element: {selector})")
+            page.touchscreen.tap(final_x, final_y)
             return True
     except Exception as e:
-        print(f"Touch failed: {e}")
+        print(f"Touch calc error: {e}")
     return False
 
 # --- AUTO PLAY ---
@@ -148,48 +159,47 @@ def process_youtube_tasks(context, page):
         bot_status["step"] = f"Task #{i}: {task_data['duration']}s"
 
         try:
-            # Highlight
+            # Highlight for Screenshot
             page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_1_Target")
 
-            # --- TOUCH ACTION ---
+            # --- ACTION: PRECISION CLICK ---
             initial_pages = len(context.pages)
             
-            # ٹچ پرفارم کریں
-            touch_success = perform_human_touch(page, task_data['startSelector'])
+            # 1. Try Precision Touch
+            touch_result = perform_precision_touch(page, task_data['startSelector'])
             
-            if not touch_success:
-                # اگر ٹچ فیل ہو گیا تو سادہ کلک ٹرائی کرو
+            if not touch_result:
+                # Fallback to standard tap
                 page.tap(task_data['startSelector'])
 
-            time.sleep(5) # ٹیب کھلنے کا مناسب انتظار
+            time.sleep(5) # Wait for tab
 
-            # --- VALIDATION ---
+            # --- VALIDATION: DID IT OPEN? ---
             if len(context.pages) == initial_pages:
-                print("Touch didn't open tab. Trying JS Force Click...")
-                bot_status["step"] = "Touch Missed. Forcing JS..."
+                print("Click missed. Trying JS Force Click...")
+                bot_status["step"] = "Missed. Forcing JS Click..."
                 
-                # آخری حل: جاوا اسکرپٹ کلک (یہ لازمی کام کرتا ہے)
+                # 2. JS Force Click (Bypasses UI layers)
                 page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
                 time.sleep(5)
                 
                 if len(context.pages) == initial_pages:
-                    print("Still failed. Skipping task.")
-                    # اگر پھر بھی نہ کھلے تو پیج ریفریش کر لو
+                    print("Task dead/unclickable. Refreshing.")
+                    bot_status["step"] = "Task Unclickable. Refreshing..."
                     page.reload()
                     time.sleep(3)
-                    continue
+                    continue # Restart loop to get fresh list
 
-            # ٹاسک شروع
+            # Task Started Successfully
             new_page = context.pages[-1]
             apply_mobile_stealth(new_page) 
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
             time.sleep(2)
-            # Handle obstacles
             try:
                 blocker = new_page.locator("button:has-text('Я ознакомлен'), a.tr_but_b")
                 if blocker.count() > 0 and blocker.first.is_visible():
@@ -200,7 +210,7 @@ def process_youtube_tasks(context, page):
             ensure_video_playing(new_page)
             take_screenshot(new_page, f"Task_{i}_2_Video_Open")
             
-            # Wait + Buffer
+            # Wait
             wait_time = task_data['duration'] + random.randint(5, 8)
             for sec in range(wait_time):
                 if not bot_status["is_running"]: 
@@ -209,13 +219,13 @@ def process_youtube_tasks(context, page):
                 if sec % 5 == 0: bot_status["step"] = f"Watching... {sec}/{wait_time}s"
                 time.sleep(1)
 
-            # Close & Confirm
+            # Close
             new_page.close()
             page.bring_to_front()
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_3_Back_Main")
 
-            # Check for Confirm Button
+            # Confirm
             confirm_selector = task_data['confirmSelector']
             
             btn_visible = False
@@ -226,8 +236,8 @@ def process_youtube_tasks(context, page):
                 time.sleep(1)
             
             if btn_visible:
-                # کنفرم پر بھی ٹچ استعمال کریں
-                perform_human_touch(page, confirm_selector)
+                # Use precision touch on confirm button too
+                perform_precision_touch(page, confirm_selector)
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_4_Success")
                 bot_status["step"] = f"Task #{i} Done!"
