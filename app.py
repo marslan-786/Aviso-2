@@ -44,7 +44,7 @@ def apply_mobile_stealth(page):
         """)
     except: pass
 
-# --- JS SCANNER (Modified: Small Tasks First) ---
+# --- JS SCANNER ---
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tasks = Array.from(document.querySelectorAll('table[id^="ads-link-"], div[id^="ads-link-"]'));
@@ -70,9 +70,8 @@ def get_best_task_via_js(page):
             };
         }).filter(item => item !== null);
 
-        // --- CHANGE 1: SORT ASCENDING (Smallest First) ---
-        data.sort((a, b) => a.price - b.price); 
-        
+        // Sort: Small tasks first (Low Price -> High Price)
+        data.sort((a, b) => a.price - b.price);
         return data.length > 0 ? data[0] : null;
     }""")
 
@@ -88,15 +87,16 @@ def ensure_video_playing(new_page):
             if viewport: new_page.mouse.click(viewport['width']/2, viewport['height']/2)
     except: pass
 
-# --- PROCESS LOGIC (Modified: 10s Delay) ---
+# --- PROCESS LOGIC ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
-    
     take_screenshot(page, "0_Main_List_Loaded")
+
+    tasks_performed = 0
 
     for i in range(1, 31): 
         if not bot_status["is_running"]: break
@@ -105,26 +105,27 @@ def process_youtube_tasks(context, page):
         task_data = get_best_task_via_js(page)
         
         if not task_data:
-            print("No tasks found. Scrolling...")
+            print("No tasks found immediately. Scrolling...")
             page.mouse.wheel(0, 500)
             time.sleep(3)
             task_data = get_best_task_via_js(page)
             if not task_data:
-                bot_status["step"] = "No Tasks. Finished."
-                break
+                print("No tasks available.")
+                bot_status["step"] = "No More Tasks."
+                break # Loop توڑ دیں تاکہ نیچے لاگ آؤٹ والے کوڈ پر جائیں
             
-        print(f"Doing Task: {task_data['id']} (Price: {task_data['price']})")
-        bot_status["step"] = f"Task #{i}: {task_data['price']} rub task..."
+        print(f"Doing Task: {task_data['id']} ({task_data['duration']}s)")
+        bot_status["step"] = f"Task #{i}: Starting..."
 
         try:
             # Highlight
             page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
-            take_screenshot(page, f"Task_{i}_1_Target_Locked")
+            take_screenshot(page, f"Task_{i}_1_Target")
 
+            # Start Task
             start_selector = task_data['startSelector']
-            
             with context.expect_page() as new_page_info:
                 page.tap(start_selector)
             
@@ -133,15 +134,11 @@ def process_youtube_tasks(context, page):
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # --- CHANGE 2: 10 SECOND WAIT BEFORE CAPTURE ---
-            bot_status["step"] = "Waiting 10s for page load..."
-            print("Waiting 10s for full load...")
-            time.sleep(10) 
+            # 10s Wait for Load
+            bot_status["step"] = "Waiting 10s load..."
+            time.sleep(10)
+            take_screenshot(new_page, f"Task_{i}_2_Video_Loaded")
             
-            # Now take screenshot (Full Loaded)
-            take_screenshot(new_page, f"Task_{i}_2_Video_Page_Loaded")
-            
-            # Then play video
             ensure_video_playing(new_page)
             take_screenshot(page, f"Task_{i}_3_Timer_Check")
             
@@ -166,7 +163,7 @@ def process_youtube_tasks(context, page):
                 }}""")
 
                 if status_check == 'error':
-                    take_screenshot(page, f"Task_{i}_Error_Msg")
+                    take_screenshot(page, f"Task_{i}_Error")
                     break 
                 
                 if status_check == 'done':
@@ -185,6 +182,7 @@ def process_youtube_tasks(context, page):
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_4_Success")
                 bot_status["step"] = f"Task #{i} Success!"
+                tasks_performed += 1
             else:
                 bot_status["step"] = "Task Timeout"
                 page.reload()
@@ -195,6 +193,23 @@ def process_youtube_tasks(context, page):
             except: pass
             page.reload()
             time.sleep(5)
+
+    # --- AUTO LOGOUT LOGIC (Executed when loop finishes or breaks) ---
+    if bot_status["is_running"]:
+        print("Tasks finished or none found. Logging out...")
+        bot_status["step"] = "Auto-Logging Out..."
+        try:
+            page.goto("https://aviso.bz/logout")
+            time.sleep(3)
+            
+            # Check login page to confirm logout
+            if page.is_visible("input[name='username']"):
+                take_screenshot(page, "Logout_Confirmed")
+                bot_status["step"] = "Logout Successful. Done."
+            else:
+                bot_status["step"] = "Logout Failed?"
+        except Exception as e:
+            print(f"Logout Error: {e}")
 
 # --- MAIN RUNNER ---
 def run_single_account(username, password):
@@ -258,9 +273,10 @@ def run_single_account(username, password):
                     page.locator("input[name='code']").press("Enter")
                     time.sleep(8)
             
-            take_screenshot(page, "Login_Done")
+            take_screenshot(page, "Login_Complete")
+            
+            # ٹاسک شروع کریں (اور ختم ہونے پر یہیں سے لاگ آؤٹ بھی ہو جائے گا)
             process_youtube_tasks(context, page)
-            bot_status["step"] = "Finished."
 
         except Exception as e:
             bot_status["step"] = f"Error: {str(e)}"
