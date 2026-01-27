@@ -3,88 +3,43 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Aviso Auto-Pilot</title>
+    <title>Aviso Diagnostic Bot</title>
     <style>
-        /* --- Hacker / Dark Theme --- */
-        body {
-            font-family: 'Courier New', Courier, monospace;
-            background-color: #0d0d0d;
-            color: #00ff41;
-            margin: 0;
-            padding: 15px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
-        }
+        body { font-family: 'Courier New', Courier, monospace; background-color: #0d0d0d; color: #00ff41; padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        .container { width: 100%; max-width: 500px; background: #1a1a1a; padding: 20px; border-radius: 15px; border: 1px solid #333; }
+        input { width: 100%; padding: 15px; margin: 8px 0; background: #000; border: 1px solid #444; color: white; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
+        
+        button { width: 100%; padding: 15px; margin-top: 10px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 18px; text-transform: uppercase; }
+        .mode-start { background: linear-gradient(45deg, #006400, #00ff41); color: black; }
+        .mode-stop { background: linear-gradient(45deg, #8b0000, #ff0000); color: white; }
+        
+        /* New Download Button */
+        .btn-log { background: #2196F3; color: white; margin-top: 5px; font-size: 14px; padding: 10px; }
 
-        .container {
-            width: 100%;
-            max-width: 500px;
-            background: #1a1a1a;
-            padding: 20px;
-            border-radius: 15px;
-            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
-            border: 1px solid #333;
-        }
-
-        h2 { margin-top: 0; border-bottom: 2px solid #333; padding-bottom: 10px; text-align: center; }
-
-        input {
-            width: 100%; padding: 15px; margin: 8px 0;
-            background: #000; border: 1px solid #444;
-            color: white; border-radius: 8px; font-size: 16px; box-sizing: border-box; outline: none;
-        }
-        input:focus { border-color: #00ff41; }
-
-        /* --- TOGGLE BUTTON --- */
-        #actionBtn {
-            width: 100%; padding: 15px; margin-top: 10px;
-            border: none; border-radius: 8px; cursor: pointer;
-            font-weight: bold; font-size: 18px; text-transform: uppercase;
-            transition: 0.3s;
-        }
-        .mode-start { background: linear-gradient(45deg, #006400, #00ff41); color: black; box-shadow: 0 0 10px #00ff41; }
-        .mode-stop { background: linear-gradient(45deg, #8b0000, #ff0000); color: white; box-shadow: 0 0 10px #ff0000; }
-
-        .btn-code { background: #ff9800; color: black; width: 100%; padding: 12px; margin-top: 5px; border:none; border-radius:6px; font-weight:bold;}
-
-        #code-area { display: none; background: #2a2000; border: 2px solid #ffcc00; padding: 15px; border-radius: 8px; margin-top: 15px; }
-
-        /* --- Status Log --- */
-        .status-wrapper {
-            margin-top: 20px; background: #000; border: 1px dashed #00ff41;
-            padding: 15px; border-radius: 8px; text-align: left;
-        }
+        .status-wrapper { margin-top: 20px; background: #000; border: 1px dashed #00ff41; padding: 15px; border-radius: 8px; }
         .live-status { font-size: 16px; color: #fff; margin-top: 5px; font-weight: bold; }
-        .live-status::after { content: "▋"; animation: blink 1s infinite; color: #00ff41; }
-        @keyframes blink { 50% { opacity: 0; } }
+        
+        #code-area { display: none; background: #2a2000; border: 2px solid #ffcc00; padding: 15px; margin-top: 15px; border-radius: 8px; }
+        .btn-code { background: #ff9800; color: black; }
 
-        /* --- Gallery --- */
-        .gallery-container {
-            display: flex; overflow-x: auto; gap: 10px; padding: 10px 0; scroll-behavior: smooth; margin-top: 10px;
-        }
-        .gallery-container::-webkit-scrollbar { display: none; }
-        .gallery-container img {
-            height: 150px; border-radius: 8px; border: 2px solid #333; flex-shrink: 0;
-        }
-        .gallery-container img.new-img { border-color: #00ff41; }
-
+        .gallery-container { display: flex; overflow-x: auto; gap: 10px; padding: 10px 0; margin-top: 10px; }
+        .gallery-container img { height: 150px; border-radius: 8px; border: 2px solid #333; flex-shrink: 0; }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h2>🤖 Aviso Bot v6.0 (Auto-Loop)</h2>
+        <h2>🔎 Aviso Debugger v7.0</h2>
         
         <input type="text" id="username" placeholder="Username / Email">
         <input type="password" id="password" placeholder="Password">
         
         <button id="actionBtn" class="mode-start" onclick="toggleBot()">🚀 START SYSTEM</button>
+        <button class="btn-log" onclick="window.location.href='/download_log'">📥 Download HTML Log</button>
 
         <div id="code-area">
             <h3 style="margin:0 0 10px 0; color:#ffcc00;">🔑 Code Required</h3>
-            <input type="text" id="otp-input" placeholder="Type Code Here..." style="text-align: center; letter-spacing: 3px; font-size: 20px;">
+            <input type="text" id="otp-input" placeholder="Type Code Here...">
             <button class="btn-code" onclick="submitCode()">Confirm Code</button>
         </div>
 
@@ -98,7 +53,7 @@
 
     <script>
         const displayedImages = new Set();
-        let isBotRunning = false; // Local state tracking
+        let isBotRunning = false;
 
         window.onload = function() {
             const savedUser = localStorage.getItem('aviso_user');
@@ -114,7 +69,6 @@
             const btn = document.getElementById('actionBtn');
 
             if (!isBotRunning) {
-                // --- START COMMAND ---
                 if(!u || !p) { alert("❌ Enter login details!"); return; }
                 localStorage.setItem('aviso_user', u);
                 localStorage.setItem('aviso_pass', p);
@@ -124,13 +78,10 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({username: u, password: p})
                 });
-                
-                // UI Instant Update
                 btn.innerText = "⏳ STARTING...";
-                btn.disabled = true; // Prevent double click
+                btn.disabled = true;
             } else {
-                // --- STOP COMMAND ---
-                if(confirm("🛑 Are you sure you want to stop the cycle?")) {
+                if(confirm("🛑 Stop bot?")) {
                     fetch('/stop', { method: 'POST' });
                     btn.innerText = "🛑 STOPPING...";
                     btn.disabled = true;
@@ -151,43 +102,32 @@
             }
         }
 
-        // --- UPDATE UI FROM SERVER STATUS ---
-        function updateButton(serverRunning) {
-            const btn = document.getElementById('actionBtn');
-            isBotRunning = serverRunning;
-
-            if (serverRunning) {
-                btn.innerText = "🛑 STOP SYSTEM";
-                btn.className = "mode-stop";
-                btn.disabled = false;
-            } else {
-                btn.innerText = "🚀 START SYSTEM";
-                btn.className = "mode-start";
-                btn.disabled = false;
-            }
-        }
-
         function pollStatus() {
             fetch('/status').then(r => r.json()).then(data => {
-                // 1. Update Text
                 const statusEl = document.getElementById('status-text');
                 if (statusEl.innerText !== data.step) statusEl.innerText = data.step;
 
-                // 2. Button Sync
-                updateButton(data.is_running);
+                const btn = document.getElementById('actionBtn');
+                isBotRunning = data.is_running;
+                if (data.is_running) {
+                    btn.innerText = "🛑 STOP SYSTEM";
+                    btn.className = "mode-stop";
+                    btn.disabled = false;
+                } else {
+                    btn.innerText = "🚀 START SYSTEM";
+                    btn.className = "mode-start";
+                    btn.disabled = false;
+                }
 
-                // 3. Code Input
                 const codeDiv = document.getElementById('code-area');
                 if (data.needs_code) codeDiv.style.display = 'block';
                 else codeDiv.style.display = 'none';
 
-                // 4. Gallery
                 const gallery = document.getElementById('gallery');
                 data.images.forEach(imgName => {
                     if (!displayedImages.has(imgName)) {
                         const img = document.createElement('img');
                         img.src = `/static/screenshots/${imgName}`; 
-                        img.classList.add("new-img");
                         img.onclick = function() { window.open(this.src, '_blank'); };
                         gallery.appendChild(img);
                         displayedImages.add(imgName);
@@ -197,9 +137,7 @@
                 });
             }).catch(e => console.log("Backend offline?"));
         }
-
         setInterval(pollStatus, 1000);
     </script>
-
 </body>
 </html>
