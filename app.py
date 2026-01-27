@@ -55,40 +55,59 @@ def get_best_task_via_js(page):
         const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
         
         for (let table of tables) {
-            // 1. Check Visibility (CSS/Geometry Level)
-            // اگر ٹاسک اسکرین پر نظر آ رہا ہے تو اسے اٹھا لو، چاہے status کچھ بھی ہو
+            // 1. Check Visibility
             if (table.offsetParent === null) continue;
             const rect = table.getBoundingClientRect();
             if (rect.height === 0 || rect.width === 0) continue; 
             
-            // ڈبل چیک: اگر display none ہے
             const style = window.getComputedStyle(table);
             if (style.display === 'none' || style.visibility === 'hidden') continue;
 
             const idPart = table.id.replace('ads-link-', '');
             
-            // ویڈیو آئیکون چیک
+            // 2. Video Check
             const isVideo = table.querySelector('.ybprosm') !== null;
             if (!isVideo) continue;
 
+            // 3. Extract Data
             const timerInput = document.getElementById('ads_timer_' + idPart);
             const duration = timerInput ? parseInt(timerInput.value) : 20;
             const priceEl = table.querySelector('span[title="Стоимость просмотра"], .price-text');
             const price = priceEl ? parseFloat(priceEl.innerText) : 0;
 
-            // پہلا نظر آنے والا ٹاسک
             return {
                 id: idPart,
                 price: price,
                 duration: duration,
                 tableId: table.id,
-                startSelector: '#link_ads_start_' + idPart,
+                startSelector: '#link_ads_start_' + idPart, // یہ وہ لنک ہے جس پر ٹیپ کرنا ہے
                 confirmSelector: '#ads_btn_confirm_' + idPart,
                 errorSelector: '#btn_error_view_' + idPart
             };
         }
         return null; 
     }""")
+
+# --- NEW: HUMAN TOUCH FUNCTION ---
+def perform_human_touch(page, selector):
+    """
+    یہ فنکشن اصلی انگلی کی طرح اسکرین پر ٹیپ کرے گا۔
+    """
+    try:
+        # 1. عنصر کی لوکیشن معلوم کریں
+        box = page.locator(selector).bounding_box()
+        if box:
+            # 2. بالکل سینٹر میں نہیں، تھوڑا سا رینڈم (Humanize)
+            x = box['x'] + box['width'] / 2 + random.uniform(-10, 10)
+            y = box['y'] + box['height'] / 2 + random.uniform(-5, 5)
+            
+            print(f"Touching at coordinates: {x}, {y}")
+            # 3. Touch Event
+            page.touchscreen.tap(x, y)
+            return True
+    except Exception as e:
+        print(f"Touch failed: {e}")
+    return False
 
 # --- AUTO PLAY ---
 def ensure_video_playing(new_page):
@@ -109,7 +128,6 @@ def process_youtube_tasks(context, page):
     
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
     take_screenshot(page, "0_Task_List")
-    save_debug_html(page)
 
     for i in range(1, 31): 
         if not bot_status["is_running"]: break
@@ -118,7 +136,7 @@ def process_youtube_tasks(context, page):
         task_data = get_best_task_via_js(page)
         
         if not task_data:
-            print("No visible tasks found. Refreshing...")
+            print("No visible tasks. Refreshing...")
             page.reload()
             time.sleep(5)
             task_data = get_best_task_via_js(page)
@@ -136,31 +154,42 @@ def process_youtube_tasks(context, page):
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_1_Target")
 
-            # --- CLICK ---
+            # --- TOUCH ACTION ---
             initial_pages = len(context.pages)
             
-            # ٹاسک پر کلک
-            page.tap(task_data['startSelector'])
-            time.sleep(4) 
+            # ٹچ پرفارم کریں
+            touch_success = perform_human_touch(page, task_data['startSelector'])
             
-            # --- NEW LOGIC: RETRY INSTEAD OF REMOVE ---
-            if len(context.pages) == initial_pages:
-                print("Click failed (No tab). Reloading page...")
-                bot_status["step"] = "Click Failed. Reloading..."
-                
-                # --- CHANGE HERE: NO REMOVE(), JUST RELOAD ---
-                page.reload()
-                time.sleep(5)
-                # لوپ توڑ دیں تاکہ نئے سرے سے لسٹ لوڈ ہو
-                break 
+            if not touch_success:
+                # اگر ٹچ فیل ہو گیا تو سادہ کلک ٹرائی کرو
+                page.tap(task_data['startSelector'])
 
+            time.sleep(5) # ٹیب کھلنے کا مناسب انتظار
+
+            # --- VALIDATION ---
+            if len(context.pages) == initial_pages:
+                print("Touch didn't open tab. Trying JS Force Click...")
+                bot_status["step"] = "Touch Missed. Forcing JS..."
+                
+                # آخری حل: جاوا اسکرپٹ کلک (یہ لازمی کام کرتا ہے)
+                page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
+                time.sleep(5)
+                
+                if len(context.pages) == initial_pages:
+                    print("Still failed. Skipping task.")
+                    # اگر پھر بھی نہ کھلے تو پیج ریفریش کر لو
+                    page.reload()
+                    time.sleep(3)
+                    continue
+
+            # ٹاسک شروع
             new_page = context.pages[-1]
             apply_mobile_stealth(new_page) 
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # Obstacles
             time.sleep(2)
+            # Handle obstacles
             try:
                 blocker = new_page.locator("button:has-text('Я ознакомлен'), a.tr_but_b")
                 if blocker.count() > 0 and blocker.first.is_visible():
@@ -171,7 +200,7 @@ def process_youtube_tasks(context, page):
             ensure_video_playing(new_page)
             take_screenshot(new_page, f"Task_{i}_2_Video_Open")
             
-            # Wait
+            # Wait + Buffer
             wait_time = task_data['duration'] + random.randint(5, 8)
             for sec in range(wait_time):
                 if not bot_status["is_running"]: 
@@ -181,13 +210,12 @@ def process_youtube_tasks(context, page):
                 time.sleep(1)
 
             # Close & Confirm
-            bot_status["step"] = "Closing & Verifying..."
             new_page.close()
             page.bring_to_front()
-            
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_3_Back_Main")
 
+            # Check for Confirm Button
             confirm_selector = task_data['confirmSelector']
             
             btn_visible = False
@@ -198,7 +226,8 @@ def process_youtube_tasks(context, page):
                 time.sleep(1)
             
             if btn_visible:
-                page.tap(confirm_selector)
+                # کنفرم پر بھی ٹچ استعمال کریں
+                perform_human_touch(page, confirm_selector)
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_4_Success")
                 bot_status["step"] = f"Task #{i} Done!"
@@ -218,7 +247,7 @@ def process_youtube_tasks(context, page):
             break
 
     if bot_status["is_running"]:
-        print("Batch finished. Logging out.")
+        print("Cycle finished. Logging out.")
         page.goto("https://aviso.bz/logout")
 
 # --- MAIN RUNNER ---
