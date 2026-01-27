@@ -3,7 +3,7 @@ import time
 import json
 import threading
 import random
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 
 app = Flask(__name__)
 
@@ -11,6 +11,7 @@ app = Flask(__name__)
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 USER_DATA_DIR = "/app/browser_data2"
+DEBUG_FILE = "debug_source.html"
 
 # --- Shared State ---
 shared_data = {"otp_code": None}
@@ -31,6 +32,13 @@ def take_screenshot(page, name):
         bot_status["images"].append(filename)
     except: pass
 
+def save_debug_html(page):
+    try:
+        content = page.content()
+        with open(DEBUG_FILE, "w", encoding="utf-8") as f:
+            f.write(content)
+    except: pass
+
 # --- MOBILE STEALTH ---
 def apply_mobile_stealth(page):
     try:
@@ -41,46 +49,54 @@ def apply_mobile_stealth(page):
         """)
     except: pass
 
-# --- JS SCANNER (No Sorting - First Visible Only) ---
+# --- JS SCANNER (Visual Only) ---
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
-        // ہم صرف وہی ٹاسک اٹھائیں گے جو DOM میں ترتیب سے پہلے ہیں
-        const tasks = Array.from(document.querySelectorAll('table[id^="ads-link-"], div[id^="ads-link-"]'));
-        const data = tasks.map(task => {
-            const idPart = task.id.replace('ads-link-', '');
+        const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
+        
+        for (let table of tables) {
+            // 1. Check Visibility (CSS/Geometry Level)
+            // اگر ٹاسک اسکرین پر نظر آ رہا ہے تو اسے اٹھا لو، چاہے status کچھ بھی ہو
+            if (table.offsetParent === null) continue;
+            const rect = table.getBoundingClientRect();
+            if (rect.height === 0 || rect.width === 0) continue; 
             
-            // ویڈیو چیک
-            const isVideo = task.querySelector('.ybprosm') !== null;
-            if (!isVideo) return null;
+            // ڈبل چیک: اگر display none ہے
+            const style = window.getComputedStyle(table);
+            if (style.display === 'none' || style.visibility === 'hidden') continue;
 
-            // ٹائمر (ویلیو یا ڈیفالٹ 20)
+            const idPart = table.id.replace('ads-link-', '');
+            
+            // ویڈیو آئیکون چیک
+            const isVideo = table.querySelector('.ybprosm') !== null;
+            if (!isVideo) continue;
+
             const timerInput = document.getElementById('ads_timer_' + idPart);
             const duration = timerInput ? parseInt(timerInput.value) : 20;
+            const priceEl = table.querySelector('span[title="Стоимость просмотра"], .price-text');
+            const price = priceEl ? parseFloat(priceEl.innerText) : 0;
 
+            // پہلا نظر آنے والا ٹاسک
             return {
                 id: idPart,
+                price: price,
                 duration: duration,
-                tableId: task.id,
+                tableId: table.id,
                 startSelector: '#link_ads_start_' + idPart,
                 confirmSelector: '#ads_btn_confirm_' + idPart,
                 errorSelector: '#btn_error_view_' + idPart
             };
-        }).filter(item => item !== null);
-
-        // --- NO SORTING ---
-        // جو سب سے پہلے ملا (سب سے اوپر والا)، وہی واپس بھیج دو
-        return data.length > 0 ? data[0] : null;
+        }
+        return null; 
     }""")
 
 # --- AUTO PLAY ---
 def ensure_video_playing(new_page):
     try:
-        # Play Button Check
         play_btn = new_page.locator(".ytp-large-play-button, button[aria-label='Play']")
-        if play_btn.count() > 0 and play_btn.first.is_visible():
+        if play_btn.count() > 0:
             play_btn.first.tap()
         else:
-            # Center Tap fallback
             vp = new_page.viewport_size
             if vp: new_page.mouse.click(vp['width']/2, vp['height']/2)
     except: pass
@@ -93,27 +109,25 @@ def process_youtube_tasks(context, page):
     
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
     take_screenshot(page, "0_Task_List")
+    save_debug_html(page)
 
-    # Infinite loop logic handled by main runner, here just process visible batch
     for i in range(1, 31): 
         if not bot_status["is_running"]: break
         
-        bot_status["step"] = f"Finding Task #{i}..."
-        
-        # 1. Get TOP Task
+        bot_status["step"] = f"Scanning Active Task #{i}..."
         task_data = get_best_task_via_js(page)
         
         if not task_data:
-            print("No tasks found immediately. Scrolling...")
-            page.mouse.wheel(0, 500)
-            time.sleep(3)
+            print("No visible tasks found. Refreshing...")
+            page.reload()
+            time.sleep(5)
             task_data = get_best_task_via_js(page)
             if not task_data:
-                bot_status["step"] = "List Empty."
+                bot_status["step"] = "No Tasks Left."
                 break
             
-        print(f"Doing Top Task: {task_data['id']} ({task_data['duration']}s)")
-        bot_status["step"] = f"Task #{i}: {task_data['duration']}s Video"
+        print(f"Target: {task_data['id']} ({task_data['duration']}s)")
+        bot_status["step"] = f"Task #{i}: {task_data['duration']}s"
 
         try:
             # Highlight
@@ -122,11 +136,25 @@ def process_youtube_tasks(context, page):
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_1_Target")
 
-            # Start
-            with context.expect_page() as new_page_info:
-                page.tap(task_data['startSelector'])
+            # --- CLICK ---
+            initial_pages = len(context.pages)
             
-            new_page = new_page_info.value
+            # ٹاسک پر کلک
+            page.tap(task_data['startSelector'])
+            time.sleep(4) 
+            
+            # --- NEW LOGIC: RETRY INSTEAD OF REMOVE ---
+            if len(context.pages) == initial_pages:
+                print("Click failed (No tab). Reloading page...")
+                bot_status["step"] = "Click Failed. Reloading..."
+                
+                # --- CHANGE HERE: NO REMOVE(), JUST RELOAD ---
+                page.reload()
+                time.sleep(5)
+                # لوپ توڑ دیں تاکہ نئے سرے سے لسٹ لوڈ ہو
+                break 
+
+            new_page = context.pages[-1]
             apply_mobile_stealth(new_page) 
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
@@ -143,11 +171,8 @@ def process_youtube_tasks(context, page):
             ensure_video_playing(new_page)
             take_screenshot(new_page, f"Task_{i}_2_Video_Open")
             
-            # --- BLIND WAIT + BUFFER ---
-            # اگر ٹاسک 20 سیکنڈ کا ہے تو ہم 25 سیکنڈ رکیں گے
-            wait_time = task_data['duration'] + 5
-            
-            # Status Update Loop
+            # Wait
+            wait_time = task_data['duration'] + random.randint(5, 8)
             for sec in range(wait_time):
                 if not bot_status["is_running"]: 
                     new_page.close()
@@ -155,47 +180,43 @@ def process_youtube_tasks(context, page):
                 if sec % 5 == 0: bot_status["step"] = f"Watching... {sec}/{wait_time}s"
                 time.sleep(1)
 
-            # --- FORCE CLOSE & CHECK ---
+            # Close & Confirm
+            bot_status["step"] = "Closing & Verifying..."
             new_page.close()
             page.bring_to_front()
             
-            # فوراً تصویر، تاکہ پتہ چلے بٹن آیا یا نہیں
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_3_Back_Main")
 
-            # Confirm Logic
-            bot_status["step"] = "Checking Confirm Button..."
-            
             confirm_selector = task_data['confirmSelector']
             
-            # 5 سیکنڈ تک بٹن ڈھونڈو
-            button_found = False
+            btn_visible = False
             for _ in range(5):
                 if page.is_visible(confirm_selector):
-                    button_found = True
+                    btn_visible = True
                     break
                 time.sleep(1)
             
-            if button_found:
+            if btn_visible:
                 page.tap(confirm_selector)
-                
-                # Success Wait
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_4_Success")
                 bot_status["step"] = f"Task #{i} Done!"
             else:
-                print("Confirm button not found.")
-                bot_status["step"] = "Confirm Missing (Skipping)"
+                print("Confirm missing.")
+                bot_status["step"] = "Confirm Missing. Refreshing..."
                 page.reload() 
+                time.sleep(3)
+                break
 
         except Exception as e:
             print(f"Task error: {e}")
-            try: new_page.close() 
+            try: context.pages[-1].close() if len(context.pages) > 1 else None
             except: pass
             page.reload()
             time.sleep(5)
+            break
 
-    # --- AUTO LOGOUT ---
     if bot_status["is_running"]:
         print("Batch finished. Logging out.")
         page.goto("https://aviso.bz/logout")
@@ -294,6 +315,11 @@ def stop_bot():
 
 @app.route('/status')
 def status(): return jsonify(bot_status)
+
+@app.route('/download_log')
+def download_log():
+    if os.path.exists(DEBUG_FILE): return send_file(DEBUG_FILE, as_attachment=True)
+    else: return "Log not found", 404
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
