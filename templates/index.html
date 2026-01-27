@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Aviso Bot - Redmi 14C Controller</title>
+    <title>Aviso Auto-Pilot</title>
     <style>
         /* --- Hacker / Dark Theme --- */
         body {
@@ -28,92 +28,45 @@
             border: 1px solid #333;
         }
 
-        h2 {
-            text-align: center;
-            margin-top: 0;
-            border-bottom: 2px solid #333;
-            padding-bottom: 10px;
-        }
+        h2 { margin-top: 0; border-bottom: 2px solid #333; padding-bottom: 10px; text-align: center; }
 
-        /* --- Inputs --- */
         input {
-            width: 100%;
-            padding: 15px;
-            margin: 8px 0;
-            background: #000;
-            border: 1px solid #444;
-            color: white;
-            border-radius: 8px;
-            font-size: 16px;
-            box-sizing: border-box;
-            outline: none;
-            transition: border 0.3s;
+            width: 100%; padding: 15px; margin: 8px 0;
+            background: #000; border: 1px solid #444;
+            color: white; border-radius: 8px; font-size: 16px; box-sizing: border-box; outline: none;
         }
         input:focus { border-color: #00ff41; }
 
-        /* --- Buttons --- */
-        button {
-            width: 100%;
-            padding: 15px;
-            margin-top: 10px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 18px;
-            text-transform: uppercase;
+        /* --- TOGGLE BUTTON --- */
+        #actionBtn {
+            width: 100%; padding: 15px; margin-top: 10px;
+            border: none; border-radius: 8px; cursor: pointer;
+            font-weight: bold; font-size: 18px; text-transform: uppercase;
+            transition: 0.3s;
         }
-        .btn-start { background: linear-gradient(45deg, #006400, #00ff41); color: black; }
-        .btn-code { background: #ff9800; color: black; margin-top: 5px; }
-        button:disabled { background: #333; color: #888; cursor: not-allowed; }
+        .mode-start { background: linear-gradient(45deg, #006400, #00ff41); color: black; box-shadow: 0 0 10px #00ff41; }
+        .mode-stop { background: linear-gradient(45deg, #8b0000, #ff0000); color: white; box-shadow: 0 0 10px #ff0000; }
 
-        /* --- Live Status --- */
+        .btn-code { background: #ff9800; color: black; width: 100%; padding: 12px; margin-top: 5px; border:none; border-radius:6px; font-weight:bold;}
+
+        #code-area { display: none; background: #2a2000; border: 2px solid #ffcc00; padding: 15px; border-radius: 8px; margin-top: 15px; }
+
+        /* --- Status Log --- */
         .status-wrapper {
-            margin-top: 20px;
-            background: #000;
-            border: 1px dashed #00ff41;
-            padding: 15px;
-            border-radius: 8px;
-            text-align: left;
+            margin-top: 20px; background: #000; border: 1px dashed #00ff41;
+            padding: 15px; border-radius: 8px; text-align: left;
         }
-        .live-status {
-            font-size: 16px;
-            color: #fff;
-            margin-top: 5px;
-            font-weight: bold;
-            white-space: pre-wrap;
-        }
+        .live-status { font-size: 16px; color: #fff; margin-top: 5px; font-weight: bold; }
         .live-status::after { content: "▋"; animation: blink 1s infinite; color: #00ff41; }
         @keyframes blink { 50% { opacity: 0; } }
 
-        /* --- 2FA Section --- */
-        #code-area {
-            display: none;
-            background: #2a2000;
-            border: 2px solid #ffcc00;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 15px;
-        }
-
         /* --- Gallery --- */
-        .gallery-label { margin-top: 20px; font-size: 14px; color: #aaa; display: flex; justify-content: space-between; }
-        
         .gallery-container {
-            display: flex;
-            overflow-x: auto;
-            gap: 10px;
-            padding: 10px 0;
-            scroll-behavior: smooth;
+            display: flex; overflow-x: auto; gap: 10px; padding: 10px 0; scroll-behavior: smooth; margin-top: 10px;
         }
         .gallery-container::-webkit-scrollbar { display: none; }
-
         .gallery-container img {
-            height: 180px;
-            border-radius: 8px;
-            border: 2px solid #333;
-            flex-shrink: 0;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+            height: 150px; border-radius: 8px; border: 2px solid #333; flex-shrink: 0;
         }
         .gallery-container img.new-img { border-color: #00ff41; }
 
@@ -122,12 +75,12 @@
 <body>
 
     <div class="container">
-        <h2>🤖 Aviso Bot v5.0</h2>
+        <h2>🤖 Aviso Bot v6.0 (Auto-Loop)</h2>
         
-        <input type="text" id="username" placeholder="Enter Email / Login">
-        <input type="password" id="password" placeholder="Enter Password">
+        <input type="text" id="username" placeholder="Username / Email">
+        <input type="password" id="password" placeholder="Password">
         
-        <button class="btn-start" id="startBtn" onclick="startBot()">🚀 START SYSTEM</button>
+        <button id="actionBtn" class="mode-start" onclick="toggleBot()">🚀 START SYSTEM</button>
 
         <div id="code-area">
             <h3 style="margin:0 0 10px 0; color:#ffcc00;">🔑 Code Required</h3>
@@ -136,128 +89,116 @@
         </div>
 
         <div class="status-wrapper">
-            <div style="font-size: 12px; color: #888;">LIVE STATUS:</div>
-            <div id="status-text" class="live-status">Initializing...</div>
+            <div style="font-size: 12px; color: #888;">LIVE LOGS:</div>
+            <div id="status-text" class="live-status">System Ready.</div>
         </div>
 
-        <div class="gallery-label">
-            <span>LIVE FEED</span>
-            <span>Swipe ⮕</span>
-        </div>
         <div class="gallery-container" id="gallery"></div>
     </div>
 
     <script>
         const displayedImages = new Set();
-        const MAX_IMAGES = 10;
+        let isBotRunning = false; // Local state tracking
 
-        // --- 1. WINDOW LOAD: Restore Data & Fetch Status Immediately ---
         window.onload = function() {
-            // LocalStorage سے پرانا پاسورڈ اٹھائیں
             const savedUser = localStorage.getItem('aviso_user');
             const savedPass = localStorage.getItem('aviso_pass');
-
             if (savedUser) document.getElementById('username').value = savedUser;
             if (savedPass) document.getElementById('password').value = savedPass;
-
-            // فوراً اسٹیٹس چیک کریں (انتظار کیے بغیر)
             pollStatus();
         };
 
-        function startBot() {
+        function toggleBot() {
             const u = document.getElementById('username').value;
             const p = document.getElementById('password').value;
-            
-            if(!u || !p) { alert("❌ Please enter details first."); return; }
+            const btn = document.getElementById('actionBtn');
 
-            // --- SAVE TO BROWSER MEMORY ---
-            localStorage.setItem('aviso_user', u);
-            localStorage.setItem('aviso_pass', p);
+            if (!isBotRunning) {
+                // --- START COMMAND ---
+                if(!u || !p) { alert("❌ Enter login details!"); return; }
+                localStorage.setItem('aviso_user', u);
+                localStorage.setItem('aviso_pass', p);
 
-            fetch('/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username: u, password: p})
-            });
-            
-            updateBtnState(true);
+                fetch('/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username: u, password: p})
+                });
+                
+                // UI Instant Update
+                btn.innerText = "⏳ STARTING...";
+                btn.disabled = true; // Prevent double click
+            } else {
+                // --- STOP COMMAND ---
+                if(confirm("🛑 Are you sure you want to stop the cycle?")) {
+                    fetch('/stop', { method: 'POST' });
+                    btn.innerText = "🛑 STOPPING...";
+                    btn.disabled = true;
+                }
+            }
         }
 
         function submitCode() {
             const code = document.getElementById('otp-input').value;
-            if(!code) return;
-
-            fetch('/submit_code', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({code: code})
-            });
-            
-            document.getElementById('otp-input').value = "";
-            document.getElementById('code-area').style.display = "none";
-        }
-
-        function updateBtnState(isRunning) {
-            const btn = document.getElementById('startBtn');
-            if (isRunning) {
-                btn.disabled = true;
-                btn.innerHTML = "⏳ SYSTEM RUNNING...";
-                btn.style.background = "#333";
-                btn.style.color = "#888";
-            } else {
-                btn.disabled = false;
-                btn.innerHTML = "🚀 START SYSTEM";
-                btn.style.background = "linear-gradient(45deg, #006400, #00ff41)";
-                btn.style.color = "black";
+            if(code) {
+                fetch('/submit_code', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({code: code})
+                });
+                document.getElementById('code-area').style.display = "none";
+                document.getElementById('otp-input').value = "";
             }
         }
 
-        // --- POLLING FUNCTION (Called periodically) ---
+        // --- UPDATE UI FROM SERVER STATUS ---
+        function updateButton(serverRunning) {
+            const btn = document.getElementById('actionBtn');
+            isBotRunning = serverRunning;
+
+            if (serverRunning) {
+                btn.innerText = "🛑 STOP SYSTEM";
+                btn.className = "mode-stop";
+                btn.disabled = false;
+            } else {
+                btn.innerText = "🚀 START SYSTEM";
+                btn.className = "mode-start";
+                btn.disabled = false;
+            }
+        }
+
         function pollStatus() {
             fetch('/status').then(r => r.json()).then(data => {
                 // 1. Update Text
                 const statusEl = document.getElementById('status-text');
                 if (statusEl.innerText !== data.step) statusEl.innerText = data.step;
 
-                // 2. Update Button State based on Backend
-                // اگر بیک اینڈ چل رہا ہے تو بٹن ڈس ایبل رکھیں، ورنہ ان ایبل کر دیں
-                updateBtnState(data.is_running);
+                // 2. Button Sync
+                updateButton(data.is_running);
 
-                // 3. Handle Code
+                // 3. Code Input
                 const codeDiv = document.getElementById('code-area');
                 if (data.needs_code) codeDiv.style.display = 'block';
                 else codeDiv.style.display = 'none';
 
-                // 4. Handle Gallery (Persistence Logic)
+                // 4. Gallery
                 const gallery = document.getElementById('gallery');
-                
-                // بیک اینڈ سے آئی ہوئی ساری تصاویر چیک کریں
                 data.images.forEach(imgName => {
-                    // اگر یہ تصویر پہلے سے موجود نہیں ہے، تب ہی ایڈ کریں
                     if (!displayedImages.has(imgName)) {
                         const img = document.createElement('img');
                         img.src = `/static/screenshots/${imgName}`; 
                         img.classList.add("new-img");
                         img.onclick = function() { window.open(this.src, '_blank'); };
-
                         gallery.appendChild(img);
                         displayedImages.add(imgName);
-
-                        // FIFO Logic (Max 10)
-                        if (gallery.children.length > MAX_IMAGES) {
-                            gallery.removeChild(gallery.firstElementChild);
-                        }
-                        
-                        // Auto Scroll
+                        if (gallery.children.length > 10) gallery.removeChild(gallery.firstElementChild);
                         gallery.scrollLeft = gallery.scrollWidth;
                     }
                 });
-            }).catch(e => console.log("Waiting for backend..."));
+            }).catch(e => console.log("Backend offline?"));
         }
 
-        // ہر 1 سیکنڈ بعد اپ ڈیٹ کریں
         setInterval(pollStatus, 1000);
-
     </script>
 
 </body>
