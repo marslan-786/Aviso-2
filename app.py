@@ -7,7 +7,6 @@ from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
 
-# --- Configuration ---
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 USER_DATA_DIR = "/app/browser_data2"
