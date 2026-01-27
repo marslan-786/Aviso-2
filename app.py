@@ -49,7 +49,7 @@ def apply_mobile_stealth(page):
         """)
     except: pass
 
-# --- JS SCANNER ---
+# --- JS SCANNER (Visual & Active) ---
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
@@ -64,12 +64,9 @@ def get_best_task_via_js(page):
             if (style.display === 'none' || style.visibility === 'hidden') continue;
 
             const idPart = table.id.replace('ads-link-', '');
-            
-            // Video Check
             const isVideo = table.querySelector('.ybprosm') !== null;
             if (!isVideo) continue;
 
-            // Data
             const timerInput = document.getElementById('ads_timer_' + idPart);
             const duration = timerInput ? parseInt(timerInput.value) : 20;
             const priceEl = table.querySelector('span[title="Стоимость просмотра"], .price-text');
@@ -80,8 +77,7 @@ def get_best_task_via_js(page):
                 price: price,
                 duration: duration,
                 tableId: table.id,
-                // یہ وہ مخصوص ٹیکسٹ والا ایلیمنٹ ہے جس پر کلک کرنا لازمی ہے
-                startSelector: '#link_ads_start_' + idPart, 
+                startSelector: '#link_ads_start_' + idPart,
                 confirmSelector: '#ads_btn_confirm_' + idPart,
                 errorSelector: '#btn_error_view_' + idPart
             };
@@ -89,46 +85,40 @@ def get_best_task_via_js(page):
         return null; 
     }""")
 
-# --- NEW: PRECISION TOUCH FUNCTION ---
-def perform_precision_touch(page, selector):
+# --- PURE JS CLICK FUNCTION ---
+def perform_js_click(page, selector):
     """
-    یہ فنکشن اس بات کی ضمانت دیتا ہے کہ کلک عنصر کے بالکل اندر ہو
+    یہ فنکشن Python کی بجائے براؤزر کے اندر جا کر JS کے ذریعے کلک کرے گا۔
     """
     try:
-        # عنصر کا باکس نکالو
-        box = page.locator(selector).bounding_box()
-        if box:
-            # سیفٹی مارجن: صرف درمیان کے 40 فیصد حصے میں کلک کرو
-            # تاکہ کناروں سے باہر جانے کا چانس 0 ہو جائے
-            safe_width = box['width'] * 0.4
-            safe_height = box['height'] * 0.4
-            
-            center_x = box['x'] + box['width'] / 2
-            center_y = box['y'] + box['height'] / 2
-            
-            # اب جو رینڈم نمبر لیں گے وہ بہت چھوٹا ہوگا
-            rand_x = random.uniform(-safe_width/2, safe_width/2)
-            rand_y = random.uniform(-safe_height/2, safe_height/2)
-            
-            final_x = center_x + rand_x
-            final_y = center_y + rand_y
-            
-            print(f"Precision Tap at: {final_x:.2f}, {final_y:.2f} (Element: {selector})")
-            page.touchscreen.tap(final_x, final_y)
-            return True
+        print(f"Executing JS Click on: {selector}")
+        page.evaluate(f"""() => {{
+            const el = document.querySelector('{selector}');
+            if (el) {{
+                el.click();
+            }} else {{
+                throw new Error('Element not found: {selector}');
+            }}
+        }}""")
+        return True
     except Exception as e:
-        print(f"Touch calc error: {e}")
-    return False
+        print(f"JS Click Error: {e}")
+        return False
 
-# --- AUTO PLAY ---
-def ensure_video_playing(new_page):
+# --- JS AUTO PLAY (For Video Page) ---
+def ensure_video_playing_js(new_page):
     try:
-        play_btn = new_page.locator(".ytp-large-play-button, button[aria-label='Play']")
-        if play_btn.count() > 0:
-            play_btn.first.tap()
-        else:
-            vp = new_page.viewport_size
-            if vp: new_page.mouse.click(vp['width']/2, vp['height']/2)
+        # ویڈیو پلیئر کے بڑے بٹن کو JS سے کلک کریں
+        new_page.evaluate("""() => {
+            const playBtn = document.querySelector('.ytp-large-play-button') || document.querySelector('button[aria-label="Play"]');
+            if (playBtn) {
+                playBtn.click();
+            } else {
+                // اگر بٹن نہ ملے تو ویڈیو ایلیمنٹ کو ڈائریکٹ پلے کرو
+                const video = document.querySelector('video');
+                if (video) video.play();
+            }
+        }""")
     except: pass
 
 # --- PROCESS LOGIC ---
@@ -159,58 +149,56 @@ def process_youtube_tasks(context, page):
         bot_status["step"] = f"Task #{i}: {task_data['duration']}s"
 
         try:
-            # Highlight for Screenshot
+            # Highlight
             page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_1_Target")
 
-            # --- ACTION: PRECISION CLICK ---
+            # --- ACTION 1: JS CLICK START ---
             initial_pages = len(context.pages)
             
-            # 1. Try Precision Touch
-            touch_result = perform_precision_touch(page, task_data['startSelector'])
+            # Pure JS Click
+            perform_js_click(page, task_data['startSelector'])
             
-            if not touch_result:
-                # Fallback to standard tap
-                page.tap(task_data['startSelector'])
-
             time.sleep(5) # Wait for tab
 
-            # --- VALIDATION: DID IT OPEN? ---
+            # --- VALIDATION ---
             if len(context.pages) == initial_pages:
-                print("Click missed. Trying JS Force Click...")
-                bot_status["step"] = "Missed. Forcing JS Click..."
-                
-                # 2. JS Force Click (Bypasses UI layers)
-                page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
+                print("JS Click didn't open tab. Retrying once...")
+                time.sleep(2)
+                # ایک بار پھر ٹرائی کریں (Double Tap Strategy)
+                perform_js_click(page, task_data['startSelector'])
                 time.sleep(5)
                 
                 if len(context.pages) == initial_pages:
-                    print("Task dead/unclickable. Refreshing.")
-                    bot_status["step"] = "Task Unclickable. Refreshing..."
+                    print("Task dead. Refreshing.")
+                    bot_status["step"] = "Click Failed. Refreshing..."
                     page.reload()
                     time.sleep(3)
-                    continue # Restart loop to get fresh list
+                    continue
 
-            # Task Started Successfully
+            # Task Started
             new_page = context.pages[-1]
             apply_mobile_stealth(new_page) 
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
             time.sleep(2)
+            # Handle obstacles (VPN Warning etc) with JS
             try:
-                blocker = new_page.locator("button:has-text('Я ознакомлен'), a.tr_but_b")
-                if blocker.count() > 0 and blocker.first.is_visible():
-                    blocker.first.tap()
-                    time.sleep(2)
+                new_page.evaluate("""() => {
+                    const btn = document.querySelector("button:contains('Я ознакомлен')") || document.querySelector("a.tr_but_b");
+                    if(btn) btn.click();
+                }""")
+                time.sleep(2)
             except: pass
 
-            ensure_video_playing(new_page)
+            # --- ACTION 2: JS VIDEO PLAY ---
+            ensure_video_playing_js(new_page)
             take_screenshot(new_page, f"Task_{i}_2_Video_Open")
             
-            # Wait
+            # Wait + Buffer
             wait_time = task_data['duration'] + random.randint(5, 8)
             for sec in range(wait_time):
                 if not bot_status["is_running"]: 
@@ -225,19 +213,25 @@ def process_youtube_tasks(context, page):
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_3_Back_Main")
 
-            # Confirm
+            # --- ACTION 3: JS CONFIRM ---
             confirm_selector = task_data['confirmSelector']
+            bot_status["step"] = "Waiting for Confirm..."
             
+            # بٹن کے لیے 5 سیکنڈ ویٹ (Visibility Check via JS)
             btn_visible = False
             for _ in range(5):
-                if page.is_visible(confirm_selector):
+                visible = page.evaluate(f"""() => {{
+                    const el = document.querySelector('{confirm_selector}');
+                    return el && el.offsetParent !== null;
+                }}""")
+                if visible:
                     btn_visible = True
                     break
                 time.sleep(1)
             
             if btn_visible:
-                # Use precision touch on confirm button too
-                perform_precision_touch(page, confirm_selector)
+                # Pure JS Click on Confirm
+                perform_js_click(page, confirm_selector)
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_4_Success")
                 bot_status["step"] = f"Task #{i} Done!"
@@ -292,9 +286,9 @@ def run_infinite_loop(username, password):
                 if page.is_visible("input[name='username']"):
                     page.fill("input[name='username']", username)
                     page.fill("input[name='password']", password)
-                    btn = page.locator("button[type='submit']")
-                    if btn.count() > 0: btn.first.tap()
-                    else: page.locator("input[name='password']").press("Enter")
+                    
+                    # Login Button via JS
+                    page.evaluate("document.querySelector('button[type=\"submit\"]').click()")
                     time.sleep(5)
 
                     if page.is_visible("input[name='code']"):
@@ -308,7 +302,7 @@ def run_infinite_loop(username, password):
                                 return
                         
                         page.fill("input[name='code']", shared_data["otp_code"])
-                        page.locator("input[name='code']").press("Enter")
+                        page.evaluate("document.querySelector('button[type=\"submit\"]').click()") # JS Click
                         time.sleep(8)
                         bot_status["needs_code"] = False
                 
