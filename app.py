@@ -40,21 +40,11 @@ def apply_mobile_stealth(page):
             Object.defineProperty(navigator, 'deviceMemory', { get: () => 4 });
             Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });
             window.ontouchstart = true;
-            
-            navigator.getBattery = async () => {
-                return {
-                    charging: false,
-                    chargingTime: Infinity,
-                    dischargingTime: 18420,
-                    level: 0.85,
-                    addEventListener: function() {},
-                    removeEventListener: function() {}
-                }
-            };
+            navigator.getBattery = async () => { return { level: 0.85, charging: false } };
         """)
     except: pass
 
-# --- JAVASCRIPT SCANNER ---
+# --- JS SCANNER ---
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tasks = Array.from(document.querySelectorAll('table[id^="ads-link-"], div[id^="ads-link-"]'));
@@ -66,11 +56,13 @@ def get_best_task_via_js(page):
             const timerId = 'timer_ads_' + idPart;
             const priceEl = task.querySelector('span[title="Стоимость просмотра"], .price-text');
             const price = priceEl ? parseFloat(priceEl.innerText) : 0;
+            const timerInput = document.getElementById('ads_timer_' + idPart);
+            const duration = timerInput ? parseInt(timerInput.value) : 15;
 
             return {
                 id: idPart,
                 price: price,
-                timerId: timerId,
+                duration: duration,
                 tableId: task.id,
                 startSelector: '#link_ads_start_' + idPart,
                 confirmSelector: '#ads_btn_confirm_' + idPart,
@@ -82,123 +74,98 @@ def get_best_task_via_js(page):
         return data.length > 0 ? data[0] : null;
     }""")
 
-# --- NEW: LOGIN HANDLER ---
-def handle_login_flow(page, username, password):
-    print("Performing Login...")
-    bot_status["step"] = "Logging In..."
-    
-    # فل ان پٹ
-    page.fill("input[name='username']", username)
-    page.fill("input[name='password']", password)
-    
-    # موبائل پر کبھی کبھی انٹر کام نہیں کرتا، بٹن ٹیپ کریں
-    submit_btn = page.locator("button[type='submit'], button:has-text('Войти'), button:has-text('Login')")
-    if submit_btn.count() > 0:
-        submit_btn.first.tap()
-    else:
-        page.locator("input[name='password']").press("Enter")
-    
-    time.sleep(5)
-
-    # 2FA Check
-    if page.is_visible("input[name='code']"):
-        bot_status["step"] = "WAITING_FOR_CODE"
-        bot_status["needs_code"] = True
-        take_screenshot(page, "Login_Code_Required")
+# --- NEW: AUTO PLAY VIDEO FUNCTION ---
+def ensure_video_playing(new_page):
+    """
+    یہ فنکشن ویڈیو پیج پر پلے بٹن ڈھونڈ کر اسے دبائے گا۔
+    """
+    print("Checking for Play Button...")
+    try:
+        # YouTube کے مختلف Play Buttons کے سلیکٹرز
+        # 1. Big Red Button (.ytp-large-play-button)
+        # 2. Generic Mobile Play Button
+        # 3. Iframe Center
         
-        while shared_data["otp_code"] is None:
-            time.sleep(2)
-            if not bot_status["is_running"]: return False
+        # پہلے کوشش: بڑا بٹن ڈھونڈو
+        play_btn = new_page.locator(".ytp-large-play-button, button[aria-label='Play'], .html5-video-player")
         
-        page.fill("input[name='code']", shared_data["otp_code"])
-        
-        # کوڈ کے بعد والا بٹن
-        code_btn = page.locator("button:has-text('Войти'), button:has-text('Login'), input[type='submit']")
-        if code_btn.count() > 0:
-            code_btn.first.tap()
+        if play_btn.count() > 0 and play_btn.first.is_visible():
+            print("Play button found! Tapping...")
+            play_btn.first.tap()
+            time.sleep(1)
         else:
-            page.locator("input[name='code']").press("Enter")
-            
-        time.sleep(8)
-        shared_data["otp_code"] = None # Reset code
-        bot_status["needs_code"] = False
-        
-    return True
+            # اگر بٹن نہیں ملا تو شاید ویڈیو iframe میں ہو۔
+            # ہم اسکرین کے بالکل بیچ میں ایک 'Tap' کریں گے (موبائل پر یہ اکثر ویڈیو چلا دیتا ہے)
+            print("Button not found via selector. Trying center tap...")
+            viewport = new_page.viewport_size
+            if viewport:
+                x = viewport['width'] / 2
+                y = viewport['height'] / 2
+                new_page.mouse.click(x, y)
+                
+    except Exception as e:
+        print(f"Auto-play error: {e}")
 
-# --- PROCESS TASKS ---
-def process_youtube_tasks(context, page, username, password):
-    bot_status["step"] = "Opening Task List..."
+# --- PROCESS LOGIC ---
+def process_youtube_tasks(context, page):
+    bot_status["step"] = "Checking Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
     
-    # --- CHECK FOR TASKS ---
-    # اگر ٹاسک نہ ملیں تو 2 بار ریفریش کر کے دیکھو
-    tasks_found = False
-    for _ in range(3):
-        task_check = get_best_task_via_js(page)
-        if task_check:
-            tasks_found = True
-            break
-        print("No tasks found, scrolling/refreshing...")
-        page.mouse.wheel(0, 1000)
-        time.sleep(2)
-    
-    # --- LOGOUT TRIGGER ---
-    if not tasks_found:
-        print("⛔ NO TASKS AVAILABLE. Logging out to switch account...")
-        bot_status["step"] = "No Tasks! Logging Out..."
-        take_screenshot(page, "No_Tasks_Proof")
-        
-        # Direct Logout Link
-        page.goto("https://aviso.bz/logout")
-        time.sleep(5)
-        
-        # Check if logout successful (should see login form)
-        if page.is_visible("input[name='username']"):
-            print("Logout successful. Re-logging in with provided credentials...")
-            handle_login_flow(page, username, password)
-            # لاگ ان کے بعد دوبارہ خود کو کال کریں (Recursion)
-            process_youtube_tasks(context, page, username, password)
-        return
+    take_screenshot(page, "0_Main_List_Loaded")
 
-    # --- IF TASKS FOUND, DO THEM ---
-    take_screenshot(page, "Tasks_Found")
-    
-    for i in range(1, 25): 
+    for i in range(1, 31): 
         if not bot_status["is_running"]: break
         
+        bot_status["step"] = f"Finding Task #{i}..."
         task_data = get_best_task_via_js(page)
+        
         if not task_data:
-            print("Tasks finished for this session.")
-            break
+            print("No tasks found. Scrolling...")
+            page.mouse.wheel(0, 500)
+            time.sleep(3)
+            task_data = get_best_task_via_js(page)
+            if not task_data:
+                print("No tasks available.")
+                bot_status["step"] = "No Tasks. Finished."
+                break
             
-        bot_status["step"] = f"Task #{i} Started..."
-        print(f"Doing Task ID: {task_data['id']}")
+        print(f"Doing Task: {task_data['id']} ({task_data['duration']}s)")
+        bot_status["step"] = f"Task #{i}: Starting..."
 
         try:
-            # Highlight
+            # Highlight Target
             page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
-            take_screenshot(page, f"Task_{i}_Start")
+            take_screenshot(page, f"Task_{i}_1_Target_Locked")
 
+            # Start Task
             start_selector = task_data['startSelector']
             
             with context.expect_page() as new_page_info:
                 page.tap(start_selector)
             
             new_page = new_page_info.value
-            apply_mobile_stealth(new_page)
+            apply_mobile_stealth(new_page) 
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # --- Sync Watch Logic ---
-            time.sleep(3)
-            take_screenshot(new_page, f"Task_{i}_Video")
+            # --- AUTO PLAY LOGIC HERE ---
+            time.sleep(2) # لوڈ ہونے دیں
+            ensure_video_playing(new_page) # <--- ویڈیو پلے کریں
             
-            max_wait = 90
+            # Screenshot to prove it's playing
+            time.sleep(2)
+            take_screenshot(new_page, f"Task_{i}_2_Video_Playing")
+            
+            # Check Timer on Main Page
+            take_screenshot(page, f"Task_{i}_3_Timer_Check")
+            
+            # Wait Loop
+            max_wait = 100
             timer_finished = False
             
             for tick in range(max_wait):
@@ -206,22 +173,26 @@ def process_youtube_tasks(context, page, username, password):
                     new_page.close()
                     return
                 
-                # Mobile Interaction
-                try: new_page.touchscreen.tap(200, 300)
+                # Keep video active
+                try: new_page.touchscreen.tap(200, 200) # Small taps to keep screen active
                 except: pass
 
                 status_check = page.evaluate(f"""() => {{
                     const btn = document.querySelector('{task_data['confirmSelector']}');
                     const err = document.querySelector('{task_data['errorSelector']}');
-                    if (err && err.offsetParent !== null) return {{ status: 'error' }};
-                    if (btn && btn.offsetParent !== null) return {{ status: 'done' }};
-                    return {{ status: 'waiting' }};
+                    if (err && err.offsetParent !== null) return 'error';
+                    if (btn && btn.offsetParent !== null) return 'done';
+                    return 'wait';
                 }}""")
 
-                if status_check['status'] == 'error': break 
-                if status_check['status'] == 'done':
+                if status_check == 'error':
+                    take_screenshot(page, f"Task_{i}_Error_Msg")
+                    break 
+                
+                if status_check == 'done':
                     timer_finished = True
                     break
+                
                 time.sleep(1)
                 if tick % 5 == 0: bot_status["step"] = f"Watching... {tick}s"
 
@@ -231,21 +202,22 @@ def process_youtube_tasks(context, page, username, password):
             if timer_finished:
                 bot_status["step"] = "Confirming..."
                 page.tap(task_data['confirmSelector'])
-                time.sleep(4)
-                take_screenshot(page, f"Task_{i}_Done")
-                bot_status["step"] = f"Task #{i} Complete!"
+                time.sleep(5)
+                take_screenshot(page, f"Task_{i}_4_Success")
+                bot_status["step"] = f"Task #{i} Success!"
             else:
+                bot_status["step"] = "Task Timeout"
                 page.reload()
 
         except Exception as e:
-            print(f"Task Error: {e}")
+            print(f"Task failed: {e}")
             try: new_page.close() 
             except: pass
             page.reload()
             time.sleep(5)
 
 # --- MAIN RUNNER ---
-def run_aviso_login(username, password):
+def run_single_account(username, password):
     global bot_status, shared_data
     from playwright.sync_api import sync_playwright
 
@@ -259,7 +231,6 @@ def run_aviso_login(username, password):
             context = p.chromium.launch_persistent_context(
                 USER_DATA_DIR,
                 headless=True,
-                # REDMI 14C Specs
                 user_agent="Mozilla/5.0 (Linux; Android 14; 2409BRN2CG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36",
                 viewport={"width": 412, "height": 915},
                 device_scale_factor=2.625,
@@ -277,21 +248,44 @@ def run_aviso_login(username, password):
             page = context.new_page()
             apply_mobile_stealth(page)
             
-            bot_status["step"] = "Checking Session..."
+            bot_status["step"] = "Opening Aviso..."
             page.goto("https://aviso.bz/tasks-youtube", timeout=60000)
             page.wait_for_load_state("networkidle")
             
-            # اگر لاگ ان نہیں ہے تو لاگ ان کرو
             if "login" in page.url or page.is_visible("input[name='username']"):
-                handle_login_flow(page, username, password)
+                print("Logging in...")
+                bot_status["step"] = "Logging In..."
+                page.goto("https://aviso.bz/login")
+                
+                page.fill("input[name='username']", username)
+                page.fill("input[name='password']", password)
+                
+                btn = page.locator("button[type='submit'], button:has-text('Войти')")
+                if btn.count() > 0: btn.first.tap()
+                else: page.locator("input[name='password']").press("Enter")
+                
+                time.sleep(5)
+
+                if page.is_visible("input[name='code']"):
+                    bot_status["step"] = "WAITING_FOR_CODE"
+                    bot_status["needs_code"] = True
+                    take_screenshot(page, "Code_Required")
+                    while shared_data["otp_code"] is None:
+                        time.sleep(2)
+                        if not bot_status["is_running"]: return
+                    
+                    page.fill("input[name='code']", shared_data["otp_code"])
+                    page.locator("input[name='code']").press("Enter")
+                    time.sleep(8)
             
-            # ٹاسک پروسیسنگ شروع کریں (یہ فنکشن اب خود ہی لاگ آؤٹ/لاگ ان سنبھالے گا)
-            process_youtube_tasks(context, page, username, password)
+            take_screenshot(page, "Login_Done")
+            process_youtube_tasks(context, page)
+            bot_status["step"] = "Finished."
 
         except Exception as e:
             bot_status["step"] = f"Error: {str(e)}"
             print(f"Critical: {e}")
-            try: take_screenshot(page, "critical_error")
+            try: take_screenshot(page, "error")
             except: pass
         
         finally:
@@ -313,7 +307,7 @@ def submit_code_api():
 def start_bot():
     if bot_status["is_running"]: return jsonify({"status": "Running"})
     data = request.json
-    t = threading.Thread(target=run_aviso_login, args=(data.get('username'), data.get('password')))
+    t = threading.Thread(target=run_single_account, args=(data.get('username'), data.get('password')))
     t.start()
     return jsonify({"status": "Started"})
 
