@@ -31,7 +31,7 @@ def take_screenshot(page, name):
         bot_status["images"].append(filename)
     except: pass
 
-# --- MOBILE STEALTH (Redmi 14C) ---
+# --- MOBILE STEALTH ---
 def apply_mobile_stealth(page):
     try:
         page.add_init_script("""
@@ -41,50 +41,43 @@ def apply_mobile_stealth(page):
         """)
     except: pass
 
-# --- ADVANCED JS SCANNER ---
-def get_all_tasks_via_js(page):
+# --- JS SCANNER (No Sorting - First Visible Only) ---
+def get_best_task_via_js(page):
     return page.evaluate("""() => {
-        // تمام ٹاسک ٹیبلز کو اٹھائیں
+        // ہم صرف وہی ٹاسک اٹھائیں گے جو DOM میں ترتیب سے پہلے ہیں
         const tasks = Array.from(document.querySelectorAll('table[id^="ads-link-"], div[id^="ads-link-"]'));
-        
         const data = tasks.map(task => {
             const idPart = task.id.replace('ads-link-', '');
             
-            // چیک کریں کہ کیا یہ ویڈیو ہے (ybprosm کلاس)
+            // ویڈیو چیک
             const isVideo = task.querySelector('.ybprosm') !== null;
             if (!isVideo) return null;
 
-            // ٹائمر کی ویلیو html سے نکالیں (آپ کے دیے گئے کوڈ کے مطابق)
+            // ٹائمر (ویلیو یا ڈیفالٹ 20)
             const timerInput = document.getElementById('ads_timer_' + idPart);
             const duration = timerInput ? parseInt(timerInput.value) : 20;
 
-            // پرائس نکالیں
-            const priceEl = task.querySelector('span[title="Стоимость просмотра"], .price-text');
-            const price = priceEl ? parseFloat(priceEl.innerText) : 0;
-
             return {
                 id: idPart,
-                price: price,
                 duration: duration,
                 tableId: task.id,
                 startSelector: '#link_ads_start_' + idPart,
                 confirmSelector: '#ads_btn_confirm_' + idPart,
-                errorSelector: '#btn_error_view_' + idPart,
-                wrapperSelector: '#ads_checking_btn_' + idPart // یہ وہ div ہے جو display:none ہوتا ہے
+                errorSelector: '#btn_error_view_' + idPart
             };
         }).filter(item => item !== null);
 
-        // ترتیب: پہلے چھوٹے ٹاسک، پھر بڑے۔
-        data.sort((a, b) => a.duration - b.duration);
-        return data;
+        // --- NO SORTING ---
+        // جو سب سے پہلے ملا (سب سے اوپر والا)، وہی واپس بھیج دو
+        return data.length > 0 ? data[0] : null;
     }""")
 
-# --- AUTO PLAY HELPER ---
+# --- AUTO PLAY ---
 def ensure_video_playing(new_page):
     try:
-        # YouTube Mobile Play Button
-        play_btn = new_page.locator(".ytp-large-play-button, .html5-video-player")
-        if play_btn.count() > 0:
+        # Play Button Check
+        play_btn = new_page.locator(".ytp-large-play-button, button[aria-label='Play']")
+        if play_btn.count() > 0 and play_btn.first.is_visible():
             play_btn.first.tap()
         else:
             # Center Tap fallback
@@ -92,133 +85,119 @@ def ensure_video_playing(new_page):
             if vp: new_page.mouse.click(vp['width']/2, vp['height']/2)
     except: pass
 
-# --- PROCESS TASKS ---
+# --- PROCESS LOGIC ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
-    # Remove AdBlock Warning
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
-    
-    take_screenshot(page, "0_List_Loaded")
+    take_screenshot(page, "0_Task_List")
 
-    # ایک بار میں سارے ٹاسک کی لسٹ لے لیں
-    all_tasks = get_all_tasks_via_js(page)
-    
-    if not all_tasks:
-        print("No tasks found.")
-        bot_status["step"] = "No Tasks Found."
-        return
-
-    print(f"Found {len(all_tasks)} tasks to process.")
-    
-    for i, task_data in enumerate(all_tasks, 1):
+    # Infinite loop logic handled by main runner, here just process visible batch
+    for i in range(1, 31): 
         if not bot_status["is_running"]: break
         
-        bot_status["step"] = f"Task {i}/{len(all_tasks)}: {task_data['duration']}s Video"
-        print(f"Processing Task ID: {task_data['id']} ({task_data['duration']}s)")
+        bot_status["step"] = f"Finding Task #{i}..."
+        
+        # 1. Get TOP Task
+        task_data = get_best_task_via_js(page)
+        
+        if not task_data:
+            print("No tasks found immediately. Scrolling...")
+            page.mouse.wheel(0, 500)
+            time.sleep(3)
+            task_data = get_best_task_via_js(page)
+            if not task_data:
+                bot_status["step"] = "List Empty."
+                break
+            
+        print(f"Doing Top Task: {task_data['id']} ({task_data['duration']}s)")
+        bot_status["step"] = f"Task #{i}: {task_data['duration']}s Video"
 
         try:
-            # 1. Scroll to Task
+            # Highlight
+            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
-            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '3px solid red';")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_1_Target")
 
-            # 2. Click Start (Open New Tab)
+            # Start
             with context.expect_page() as new_page_info:
                 page.tap(task_data['startSelector'])
             
             new_page = new_page_info.value
-            apply_mobile_stealth(new_page)
+            apply_mobile_stealth(new_page) 
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # 3. Play Video & Handle Obstacles
+            # Obstacles
             time.sleep(2)
             try:
-                blocker = new_page.locator("button:has-text('Я ознакомлен'), a:has-text('Приступить')")
+                blocker = new_page.locator("button:has-text('Я ознакомлен'), a.tr_but_b")
                 if blocker.count() > 0 and blocker.first.is_visible():
                     blocker.first.tap()
                     time.sleep(2)
             except: pass
 
             ensure_video_playing(new_page)
-            take_screenshot(new_page, f"Task_{i}_2_Video")
-
-            # 4. SMART WAIT (The Fix)
-            # ہم ٹائمر کا انتظار کریں گے، لیکن ساتھ ساتھ Aviso کے مین پیج کو چیک کرتے رہیں گے
-            # کہ بٹن ظاہر ہوا یا نہیں۔
+            take_screenshot(new_page, f"Task_{i}_2_Video_Open")
             
-            wait_limit = task_data['duration'] + 30 # Buffer time
-            confirm_ready = False
+            # --- BLIND WAIT + BUFFER ---
+            # اگر ٹاسک 20 سیکنڈ کا ہے تو ہم 25 سیکنڈ رکیں گے
+            wait_time = task_data['duration'] + 5
             
-            for sec in range(wait_limit):
+            # Status Update Loop
+            for sec in range(wait_time):
                 if not bot_status["is_running"]: 
                     new_page.close()
                     return
-
-                # Keep Video Active
-                try: new_page.touchscreen.tap(100, 200)
-                except: pass
-                
-                # Check Main Page for Button Visibility
-                # ہم چیک کریں گے کہ کیا کنفرم بٹن اب نظر آ رہا ہے؟
-                is_visible = page.evaluate(f"""() => {{
-                    const btn = document.querySelector('{task_data['confirmSelector']}');
-                    const wrapper = document.querySelector('{task_data['wrapperSelector']}');
-                    
-                    // اگر ریپر کا display 'none' نہیں ہے، یا بٹن نظر آ رہا ہے
-                    if (btn && btn.offsetParent !== null) return true;
-                    if (wrapper && wrapper.style.display !== 'none') return true;
-                    return false;
-                }}""")
-
-                if is_visible:
-                    print("Timer Finished! Button is visible.")
-                    confirm_ready = True
-                    break
-                
-                if sec % 5 == 0:
-                    bot_status["step"] = f"Watching... {sec}/{task_data['duration']}s"
+                if sec % 5 == 0: bot_status["step"] = f"Watching... {sec}/{wait_time}s"
                 time.sleep(1)
 
-            # 5. Confirm
+            # --- FORCE CLOSE & CHECK ---
             new_page.close()
             page.bring_to_front()
             
-            if confirm_ready:
-                # Human Delay
-                time.sleep(random.randint(2, 4))
-                bot_status["step"] = "Clicking Confirm..."
+            # فوراً تصویر، تاکہ پتہ چلے بٹن آیا یا نہیں
+            time.sleep(1)
+            take_screenshot(page, f"Task_{i}_3_Back_Main")
+
+            # Confirm Logic
+            bot_status["step"] = "Checking Confirm Button..."
+            
+            confirm_selector = task_data['confirmSelector']
+            
+            # 5 سیکنڈ تک بٹن ڈھونڈو
+            button_found = False
+            for _ in range(5):
+                if page.is_visible(confirm_selector):
+                    button_found = True
+                    break
+                time.sleep(1)
+            
+            if button_found:
+                page.tap(confirm_selector)
                 
-                # کلک کریں
-                page.tap(task_data['confirmSelector'])
-                
-                # کامیابی کا انتظار
+                # Success Wait
                 time.sleep(5)
-                take_screenshot(page, f"Task_{i}_3_Success")
-                bot_status["step"] = f"Task {i} Done!"
+                take_screenshot(page, f"Task_{i}_4_Success")
+                bot_status["step"] = f"Task #{i} Done!"
             else:
-                print("Task timed out. Button never appeared.")
-                bot_status["step"] = "Task Failed (Timeout)"
-                # اگر ایک ٹاسک فیل ہو تو پیج ریفریش کر لو تاکہ اگلا صحیح چلے
-                page.reload()
-                time.sleep(5)
-                # ریفریش کے بعد لسٹ دوبارہ لینی پڑے گی، اس لیے لوپ بریک کریں
-                break 
+                print("Confirm button not found.")
+                bot_status["step"] = "Confirm Missing (Skipping)"
+                page.reload() 
 
         except Exception as e:
-            print(f"Task Failed: {e}")
+            print(f"Task error: {e}")
             try: new_page.close() 
             except: pass
             page.reload()
-            break
+            time.sleep(5)
 
     # --- AUTO LOGOUT ---
     if bot_status["is_running"]:
-        print("Cycle ending. Logging out...")
+        print("Batch finished. Logging out.")
         page.goto("https://aviso.bz/logout")
 
 # --- MAIN RUNNER ---
@@ -278,7 +257,6 @@ def run_infinite_loop(username, password):
                 
                 context.close()
                 
-                # Sleep Loop
                 print("Waiting 1 hour...")
                 for s in range(3600):
                     if not bot_status["is_running"]: return
@@ -303,7 +281,7 @@ def submit_code_api():
 
 @app.route('/start', methods=['POST'])
 def start_bot():
-    if bot_status["is_running"]: return jsonify({"status": "Running"})
+    if bot_status["is_running"]: return jsonify({"status": "Already Running"})
     data = request.json
     t = threading.Thread(target=run_infinite_loop, args=(data.get('username'), data.get('password')))
     t.start()
