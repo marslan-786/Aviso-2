@@ -423,6 +423,124 @@ def download_log():
     if os.path.exists(DEBUG_FILE): return send_file(DEBUG_FILE, as_attachment=True)
     else: return "Log not found", 404
 
+# --- GMAIL SPECIFIC STATE ---
+gmail_status = {
+    "active": False,
+    "step": "Waiting",
+    "screenshot": "placeholder.png"
+}
+
+# --- GMAIL AUTOMATION ENGINE ---
+def run_gmail_process(email, password):
+    global current_browser_context, gmail_status
+    from playwright.sync_api import sync_playwright
+
+    gmail_status["active"] = True
+    gmail_status["step"] = "Launching Browser..."
+
+    with sync_playwright() as p:
+        try:
+            # اسی فولڈر کا استعمال تاکہ سیشن مین بوٹ کے ساتھ شیئر ہو
+            context = p.chromium.launch_persistent_context(
+                USER_DATA_DIR,
+                headless=True,
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800},
+                args=["--disable-blink-features=AutomationControlled", "--start-maximized"]
+            )
+            current_browser_context = context
+            page = context.new_page()
+            
+            # Google Login URL
+            gmail_status["step"] = "Opening Google..."
+            page.goto("https://accounts.google.com/")
+            time.sleep(2)
+            take_screenshot(page, "Gmail_0_Start")
+            gmail_status["screenshot"] = bot_status["images"][-1]
+
+            # 1. EMAIL STEP
+            if page.is_visible('input[type="email"]'):
+                gmail_status["step"] = "Typing Email..."
+                page.fill('input[type="email"]', email)
+                time.sleep(1)
+                page.keyboard.press("Enter")
+                time.sleep(5) # Wait for password field
+                take_screenshot(page, "Gmail_1_After_Email")
+                gmail_status["screenshot"] = bot_status["images"][-1]
+
+            # 2. PASSWORD STEP
+            if page.is_visible('input[type="password"]'):
+                gmail_status["step"] = "Typing Password..."
+                page.fill('input[type="password"]', password)
+                time.sleep(1)
+                page.keyboard.press("Enter")
+                gmail_status["step"] = "Password Sent. Waiting..."
+                time.sleep(5)
+            
+            # 3. LIVE MONITORING LOOP (The "Pal Pal" Screenshot)
+            # اب یہ لوپ چلتا رہے گا تاکہ آپ 2FA دیکھ سکیں
+            for i in range(120): # 120 بار * 3 سیکنڈ = 6 منٹ تک لائیو رہے گا
+                if not gmail_status["active"]: break
+                
+                # Check title to see if logged in
+                title = page.title()
+                gmail_status["step"] = f"Live Monitor: {title} ({120-i}s left)"
+                
+                # Take fresh screenshot
+                timestamp = int(time.time())
+                filename = f"Gmail_Live_{timestamp}.png"
+                path = os.path.join(SCREENSHOT_DIR, filename)
+                page.screenshot(path=path)
+                
+                # Update status for frontend
+                gmail_status["screenshot"] = filename
+                
+                # اگر لاگ ان مکمل ہو گیا ہو
+                if "My Account" in title or "Inbox" in title:
+                    gmail_status["step"] = "🎉 LOGIN SUCCESSFUL!"
+                    time.sleep(5)
+                    break
+                
+                time.sleep(3) # ہر 3 سیکنڈ بعد اپ ڈیٹ
+
+        except Exception as e:
+            gmail_status["step"] = f"Error: {str(e)}"
+        
+        finally:
+            try: context.close()
+            except: pass
+            current_browser_context = None
+            gmail_status["active"] = False
+            gmail_status["step"] = "Session Closed."
+
+# --- GMAIL ROUTES ---
+
+@app.route('/gmail')
+def gmail_page():
+    return render_template('gmail.html')
+
+@app.route('/start_gmail', methods=['POST'])
+def start_gmail():
+    if bot_status["is_running"]:
+        return jsonify({"status": "Error: Stop Aviso Bot First!"})
+    
+    if gmail_status["active"]:
+        return jsonify({"status": "Gmail process already running"})
+
+    data = request.json
+    t = threading.Thread(target=run_gmail_process, args=(data.get('email'), data.get('password')))
+    t.start()
+    return jsonify({"status": "Started"})
+
+@app.route('/stop_gmail', methods=['POST'])
+def stop_gmail():
+    gmail_status["active"] = False
+    return jsonify({"status": "Stopping..."})
+
+@app.route('/gmail_status')
+def get_gmail_status():
+    return jsonify(gmail_status)
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
