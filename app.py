@@ -11,7 +11,7 @@ app = Flask(__name__)
 # --- Configuration ---
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-USER_DATA_DIR = "/app/browser_data"
+USER_DATA_DIR = "/app/browser_data2"
 DEBUG_FILE = "debug_source.html"
 
 # --- Shared State ---
@@ -50,7 +50,7 @@ def apply_mobile_stealth(page):
             "sec-ch-ua": '"Not A(Brand";v="99", "Android WebView";v="133", "Chromium";v="133"',
             "sec-ch-ua-mobile": "?1",
             "sec-ch-ua-platform": '"Android"',
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7", # Russian First
             "Upgrade-Insecure-Requests": "1"
         })
     except: pass
@@ -92,6 +92,8 @@ def get_best_task_via_js(page):
 # --- VISUAL TOUCH ---
 def perform_visual_touch(page, selector, screenshot_name):
     try:
+        if not page.is_visible(selector): return False
+
         box = page.locator(selector).bounding_box()
         if box:
             center_x = box['x'] + box['width'] / 2
@@ -241,7 +243,7 @@ def process_youtube_tasks(context, page):
         print("Cycle finished. Logging out.")
         page.goto("https://aviso.bz/logout")
 
-# --- MAIN RUNNER (Detailed Login Logs) ---
+# --- MAIN RUNNER ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
@@ -276,52 +278,50 @@ def run_infinite_loop(username, password):
                 page = context.new_page()
                 apply_mobile_stealth(page)
                 
-                # --- STEP 1: OPEN PAGE ---
-                bot_status["step"] = "Opening Login Page..."
+                bot_status["step"] = "Logging In..."
                 page.goto("https://aviso.bz/login", timeout=60000)
-                page.wait_for_load_state("networkidle")
-                take_screenshot(page, "1_Login_Page_Opened")
                 
                 if page.is_visible("input[name='username']"):
-                    
-                    # --- STEP 2: USERNAME ---
-                    bot_status["step"] = "Typing Username..."
-                    print("Typing Username...")
+                    # Type Credentials
                     page.click("input[name='username']")
-                    page.type("input[name='username']", username, delay=120)
-                    time.sleep(1)
-                    take_screenshot(page, "2_Username_Typed")
-
-                    # --- STEP 3: PASSWORD ---
-                    bot_status["step"] = "Typing Password..."
-                    print("Typing Password...")
+                    page.type("input[name='username']", username, delay=100)
+                    time.sleep(0.5)
                     page.click("input[name='password']")
-                    page.type("input[name='password']", password, delay=120)
+                    page.type("input[name='password']", password, delay=100)
                     time.sleep(1)
-                    take_screenshot(page, "3_Password_Typed")
 
-                    # Safety Check: Fill if empty
-                    if not page.input_value("input[name='password']"):
-                        print("Empty fields detected. Force filling...")
-                        page.fill("input[name='username']", username)
-                        page.fill("input[name='password']", password)
-
-                    # --- STEP 4: CLICK LOGIN ---
-                    bot_status["step"] = "Clicking Login Button..."
-                    print("Clicking Submit...")
+                    take_screenshot(page, "Login_Filled")
                     
-                    # Try Visual Touch first, else standard click
-                    if not perform_visual_touch(page, "button[type='submit']", "4_Login_Aim"):
-                        page.locator("button[type='submit']").click()
+                    # --- FIXED LOGIN CLICK ---
+                    # 1. Try hitting Enter Key (The most reliable way)
+                    print("Pressing ENTER...")
+                    bot_status["step"] = "Pressing ENTER..."
+                    page.press("input[name='password']", "Enter")
                     
                     time.sleep(5)
-                    take_screenshot(page, "5_After_Click")
+                    
+                    # 2. If still on login page, try clicking Russian button
+                    if page.is_visible("input[name='password']"):
+                        print("Enter failed. Clicking 'Войти'...")
+                        bot_status["step"] = "Clicking 'Войти'..."
+                        
+                        # Try finding by Russian Text
+                        btn = page.locator("button:has-text('Войти')")
+                        if btn.count() > 0:
+                            perform_visual_touch(page, "button:has-text('Войти')", "Login_Button_Aim")
+                        else:
+                            # Fallback to Submit Type
+                            perform_visual_touch(page, "button[type='submit']", "Login_Submit_Aim")
+                        
+                        time.sleep(5)
 
-                    # --- STEP 5: 2FA / CAPTCHA ---
+                    take_screenshot(page, "After_Login_Attempt")
+
+                    # 2FA / OTP Check
                     if page.is_visible("input[name='code']"):
                         bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
-                        take_screenshot(page, "6_Code_Required")
+                        take_screenshot(page, "Code_Required")
                         
                         count = 0
                         while shared_data["otp_code"] is None:
@@ -331,22 +331,23 @@ def run_infinite_loop(username, password):
                         
                         if shared_data["otp_code"]:
                             page.fill("input[name='code']", shared_data["otp_code"])
-                            page.evaluate("document.querySelector('button[type=\"submit\"]').click()")
+                            # Enter key for Code too
+                            page.press("input[name='code']", "Enter")
                             time.sleep(8)
                             bot_status["needs_code"] = False
                             shared_data["otp_code"] = None
 
-                    # --- STEP 6: VERIFY ---
+                    # Verification
                     if page.is_visible("input[name='username']"):
                         print("Login failed. Retrying...")
                         bot_status["step"] = "Login Failed. Retrying..."
-                        take_screenshot(page, "7_Login_Failed")
+                        take_screenshot(page, "Login_Failed")
                         time.sleep(5)
                         context.close()
                         continue
                 
                 bot_status["step"] = "Login Success!"
-                take_screenshot(page, "8_Login_Success")
+                take_screenshot(page, "Login_Success")
                 process_youtube_tasks(context, page)
                 
                 context.close()
