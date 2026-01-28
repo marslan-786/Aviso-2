@@ -4,6 +4,7 @@ import json
 import threading
 import random
 import shutil
+import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 
 app = Flask(__name__)
@@ -12,7 +13,7 @@ app = Flask(__name__)
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 USER_DATA_DIR = "/app/browser_data2"
-DEBUG_FILE = "debug_source.html"
+DEBUG_FILE = "debug_source.html" # یہ اب ایک بڑی ہسٹری فائل ہوگی
 
 # --- Shared State ---
 shared_data = {"otp_code": None}
@@ -34,11 +35,37 @@ def take_screenshot(page, name):
         bot_status["images"].append(filename)
     except: pass
 
-def save_debug_html(page):
+# --- CONTINUOUS LOGGING FUNCTION ---
+def save_debug_html(page, step_name):
+    """
+    یہ فنکشن اب پرانا ڈیٹا اڑائے گا نہیں، بلکہ اسی فائل میں نیا HTML جوڑ دے گا۔
+    ہر سٹیپ کے ساتھ ٹائم اور نام بھی لکھے گا۔
+    """
     try:
         content = page.content()
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        separator = f"""
+        \n\n
+        <div style="background:black;color:yellow;padding:20px;margin:20px;font-size:24px;border:5px solid red;">
+            ⚠️ STEP RECORDED: {step_name} <br> 🕒 TIME: {timestamp}
+        </div>
+        \n\n
+        """
+        
+        # Mode 'a' (Append) استعمال ہو رہا ہے تاکہ پچھلا ڈیٹا ضائع نہ ہو
+        with open(DEBUG_FILE, "a", encoding="utf-8") as f:
+            f.write(separator + content)
+            
+        print(f"✅ Log appended: {step_name}")
+    except Exception as e:
+        print(f"Log Error: {e}")
+
+# --- RESET LOG (On Start) ---
+def reset_debug_log():
+    try:
         with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-            f.write(content)
+            f.write("<h1>🤖 AVISO BOT LOG STARTED</h1>")
     except: pass
 
 # --- MOBILE STEALTH ---
@@ -59,6 +86,7 @@ def apply_mobile_stealth(page):
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
+        
         for (let table of tables) {
             if (table.offsetParent === null) continue;
             const rect = table.getBoundingClientRect();
@@ -92,16 +120,19 @@ def get_best_task_via_js(page):
 # --- VISUAL TOUCH ---
 def perform_visual_touch(page, selector, screenshot_name):
     try:
-        if not page.is_visible(selector): return False
         box = page.locator(selector).bounding_box()
         if box:
             center_x = box['x'] + box['width'] / 2
             center_y = box['y'] + box['height'] / 2
-            safe_w, safe_h = box['width'] * 0.3, box['height'] * 0.3
+            
+            safe_w = box['width'] * 0.3
+            safe_h = box['height'] * 0.3
+            
             x = center_x + random.uniform(-safe_w, safe_w)
             y = center_y + random.uniform(-safe_h, safe_h)
             
             print(f"Aiming: {x:.1f}, {y:.1f}")
+
             page.evaluate(f"""() => {{
                 const d = document.createElement('div');
                 d.id = 'aim-dot';
@@ -113,6 +144,7 @@ def perform_visual_touch(page, selector, screenshot_name):
                 d.style.pointerEvents = 'none';
                 document.body.appendChild(d);
             }}""")
+
             time.sleep(0.5) 
             take_screenshot(page, screenshot_name)
             page.touchscreen.tap(x, y)
@@ -139,6 +171,9 @@ def process_youtube_tasks(context, page):
     if page.is_visible("input[name='username']"): return
 
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
+    
+    # LOG: Task List Open
+    save_debug_html(page, "1_Task_List_Opened")
     take_screenshot(page, "0_Task_List")
 
     for i in range(1, 31): 
@@ -149,7 +184,7 @@ def process_youtube_tasks(context, page):
         
         if not task_data:
             print("No visible tasks.")
-            save_debug_html(page)
+            save_debug_html(page, f"No_Tasks_Found_Step_{i}")
             bot_status["step"] = "No Tasks Visible."
             break
             
@@ -161,6 +196,9 @@ def process_youtube_tasks(context, page):
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_1_Target")
+            
+            # LOG: Before Click
+            save_debug_html(page, f"Task_{i}_Before_Click")
 
             initial_pages = len(context.pages)
             if not perform_visual_touch(page, task_data['startSelector'], f"Task_{i}_2_Aim_Start"):
@@ -168,11 +206,13 @@ def process_youtube_tasks(context, page):
                 continue
             
             time.sleep(5)
+
             if len(context.pages) == initial_pages:
                 print("Click missed. JS Backup...")
                 page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
                 time.sleep(5)
                 if len(context.pages) == initial_pages:
+                    print("Dead link. Refreshing.")
                     page.reload()
                     continue
 
@@ -181,6 +221,9 @@ def process_youtube_tasks(context, page):
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
+            # LOG: Video Page Opened
+            save_debug_html(new_page, f"Task_{i}_Video_Page_Opened")
+
             try: new_page.mouse.move(100, 100); new_page.mouse.move(200, 200)
             except: pass
 
@@ -208,6 +251,9 @@ def process_youtube_tasks(context, page):
             new_page.close()
             page.bring_to_front()
             time.sleep(1)
+            
+            # LOG: Back on Main Page
+            save_debug_html(page, f"Task_{i}_Back_On_Main_Before_Confirm")
             take_screenshot(page, f"Task_{i}_4_Back_Main")
 
             confirm_selector = task_data['confirmSelector']
@@ -225,7 +271,12 @@ def process_youtube_tasks(context, page):
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_6_Success")
                 bot_status["step"] = f"Task #{i} Done!"
+                # LOG: Success
+                save_debug_html(page, f"Task_{i}_Success_After_Confirm")
             else:
+                print("Confirm missing.")
+                save_debug_html(page, f"Task_{i}_Confirm_Missing_Error")
+                bot_status["step"] = "Confirm Missing. Refreshing..."
                 page.reload()
                 time.sleep(3)
                 break
@@ -242,10 +293,13 @@ def process_youtube_tasks(context, page):
         print("Cycle finished. Logging out.")
         page.goto("https://aviso.bz/logout")
 
-# --- MAIN RUNNER (5s Wait + OTP Priority) ---
+# --- MAIN RUNNER ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
+
+    # *** RESET LOG FILE ON START ***
+    reset_debug_log()
 
     bot_status["is_running"] = True
     bot_status["needs_code"] = False
@@ -281,8 +335,10 @@ def run_infinite_loop(username, password):
                 page.goto("https://aviso.bz/login", timeout=60000)
                 page.wait_for_load_state("networkidle")
                 
+                # LOG: Login Page Loaded
+                save_debug_html(page, "Login_Page_Initial_Load")
+                
                 if page.is_visible("input[name='username']"):
-                    # Type Credentials
                     page.click("input[name='username']")
                     page.type("input[name='username']", username, delay=120)
                     time.sleep(0.5)
@@ -290,24 +346,39 @@ def run_infinite_loop(username, password):
                     page.type("input[name='password']", password, delay=120)
                     time.sleep(1)
 
-                    # --- ENTER & 5s WAIT ---
+                    # LOG: Filled Credentials
+                    save_debug_html(page, "Login_Credentials_Filled")
+
                     bot_status["step"] = "Pressing Enter..."
-                    print("Pressing ENTER...")
                     page.press("input[name='password']", "Enter")
                     
-                    # 1. 5 Seconds Wait (As requested)
-                    bot_status["step"] = "Waiting 5s for response..."
                     time.sleep(5)
+                    take_screenshot(page, "Login_Check_5s")
                     
-                    # 2. IMMEDIATE SCREENSHOT
-                    take_screenshot(page, "Login_Result_5s")
+                    # LOG: After Enter Press
+                    save_debug_html(page, "Login_After_Enter_Press")
                     
-                    # 3. OTP CHECK (High Priority)
+                    try:
+                        btn_text = page.locator("button[type='submit']").inner_text().lower()
+                        if "подождите" in btn_text:
+                            bot_status["step"] = "Stuck on Loading. Retrying in 10s..."
+                            time.sleep(10)
+                            
+                            btn_text_again = page.locator("button[type='submit']").inner_text().lower()
+                            if "подождите" in btn_text_again:
+                                print("Login Frozen. Refreshing Page...")
+                                bot_status["step"] = "Frozen. Refreshing..."
+                                page.reload()
+                                time.sleep(5)
+                                context.close()
+                                continue 
+                    except: pass
+
                     if page.is_visible("input[name='code']"):
-                        print("OTP/Code Detected!")
                         bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
                         take_screenshot(page, "Code_Required")
+                        save_debug_html(page, "OTP_Code_Page")
                         
                         count = 0
                         while shared_data["otp_code"] is None:
@@ -322,30 +393,10 @@ def run_infinite_loop(username, password):
                             bot_status["needs_code"] = False
                             shared_data["otp_code"] = None
 
-                    # 4. Check if Still on Login Page
-                    elif page.is_visible("input[name='username']"):
-                         # Check for loading msg
-                         try:
-                             btn_text = page.locator("button[type='submit']").inner_text().lower()
-                             if "подождите" in btn_text:
-                                 bot_status["step"] = "Still Loading... (Wait 5s)"
-                                 time.sleep(5)
-                             else:
-                                 # If not loading and still here -> Click Button
-                                 print("Enter didn't work. Clicking button...")
-                                 bot_status["step"] = "Clicking 'Войти'..."
-                                 btn = page.locator("button:has-text('Войти')")
-                                 if btn.count() > 0:
-                                     perform_visual_touch(page, "button:has-text('Войти')", "Login_Btn_Retry")
-                                 else:
-                                     page.locator("button[type='submit']").click()
-                                 time.sleep(5)
-                         except: pass
-
-                    # Verify Login Success
                     if page.is_visible("input[name='username']") and not page.is_visible("input[name='code']"):
                          print("Login failed completely.")
                          bot_status["step"] = "Login Failed. Restarting..."
+                         save_debug_html(page, "Login_Final_Fail_State")
                          take_screenshot(page, "Login_Failed_Final")
                          time.sleep(3)
                          context.close()
@@ -353,6 +404,7 @@ def run_infinite_loop(username, password):
                 
                 bot_status["step"] = "Login Success!"
                 take_screenshot(page, "Login_Success")
+                save_debug_html(page, "Login_Successful_Dashboard")
                 process_youtube_tasks(context, page)
                 
                 context.close()
