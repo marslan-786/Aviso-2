@@ -5,6 +5,7 @@ import threading
 import random
 import shutil
 import datetime
+import subprocess
 from flask import Flask, render_template, request, jsonify, send_file
 
 app = Flask(__name__)
@@ -14,6 +15,7 @@ SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 USER_DATA_DIR = "/app/browser_data2"
 DEBUG_FILE = "debug_source.html"
+PROXY_FILE = "proxy_config.txt"  # فائل جہاں پروکسی سیو ہوگی
 
 # --- Shared State ---
 shared_data = {"otp_code": None}
@@ -23,8 +25,32 @@ bot_status = {
     "step": "Idle",
     "images": [],
     "is_running": False,
-    "needs_code": False
+    "needs_code": False,
+    "proxy_status": "Direct IP"
 }
+
+# --- HELPER FUNCTIONS ---
+def get_proxy_config():
+    """
+    یہ فنکشن فائل سے پروکسی پڑھ کر Playwright کے فارمیٹ میں دے گا۔
+    فارمیٹ: ip:port:user:pass یا ip:port
+    """
+    if os.path.exists(PROXY_FILE):
+        try:
+            with open(PROXY_FILE, "r") as f:
+                proxy_str = f.read().strip()
+                if not proxy_str: return None
+                
+                parts = proxy_str.split(":")
+                proxy_dict = {"server": f"http://{parts[0]}:{parts[1]}"}
+                
+                if len(parts) == 4:
+                    proxy_dict["username"] = parts[2]
+                    proxy_dict["password"] = parts[3]
+                
+                return proxy_dict
+        except: return None
+    return None
 
 def take_screenshot(page, name):
     try:
@@ -39,10 +65,7 @@ def save_debug_html(page, step_name):
     try:
         content = page.content()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        separator = f"""
-        \n\n<div style="background:#111;color:#0f0;padding:15px;margin:20px;border:3px solid #0f0;font-family:monospace;">
-            🖱️ ACTION: {step_name} <br> 🕒 TIME: {timestamp}
-        </div>\n\n"""
+        separator = f"\n\n\n"
         with open(DEBUG_FILE, "a", encoding="utf-8") as f:
             f.write(separator + content)
     except: pass
@@ -50,7 +73,7 @@ def save_debug_html(page, step_name):
 def reset_debug_log():
     try:
         with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-            f.write("<h1>🖱️ AVISO LOGOUT EDITION</h1>")
+            f.write("<h1>🖱️ AVISO BOT LOGS</h1>")
     except: pass
 
 # --- JS SCANNER ---
@@ -99,14 +122,11 @@ def perform_human_mouse_click(page, selector, screenshot_name):
 
             page.evaluate(f"""() => {{
                 const d = document.createElement('div');
-                d.id = 'click-dot';
-                d.style.position = 'fixed'; 
+                d.id = 'click-dot'; d.style.position = 'fixed'; 
                 d.style.left = '{x-5}px'; d.style.top = '{y-5}px';
                 d.style.width = '10px'; d.style.height = '10px';
-                d.style.background = 'red'; 
-                d.style.border = '2px solid white';
-                d.style.borderRadius = '50%';
-                d.style.zIndex = '9999999';
+                d.style.background = 'red'; d.style.border = '2px solid white';
+                d.style.borderRadius = '50%'; d.style.zIndex = '9999999';
                 d.style.pointerEvents = 'none';
                 document.body.appendChild(d);
             }}""")
@@ -131,7 +151,7 @@ def ensure_video_playing(page):
         page.evaluate("document.querySelector('.ytp-large-play-button')?.click()")
     except: pass
 
-# --- PROCESS TASKS (With Logout) ---
+# --- PROCESS TASKS (New Logic: 10s Wait Screenshot) ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
@@ -151,7 +171,6 @@ def process_youtube_tasks(context, page):
         
         if not task_data:
             print("No tasks.")
-            save_debug_html(page, "No_Tasks_Found")
             bot_status["step"] = "No Tasks Visible."
             break
             
@@ -162,7 +181,7 @@ def process_youtube_tasks(context, page):
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_Target")
 
-            # START
+            # START CLICK
             initial_pages = len(context.pages)
             if not perform_human_mouse_click(page, task_data['startSelector'], f"Task_{i}_Start_Click"):
                 page.reload()
@@ -192,15 +211,25 @@ def process_youtube_tasks(context, page):
             except: pass
 
             ensure_video_playing(new_page)
-            take_screenshot(new_page, f"Task_{i}_Video_Playing")
             
-            wait_time = task_data['duration'] + random.randint(6, 12)
-            for sec in range(wait_time):
+            # --- NEW LOGIC: WAIT 10s & PROVE IT ---
+            bot_status["step"] = "Video Started. Waiting 10s for proof..."
+            print("Video started, waiting 10s...")
+            time.sleep(10)
+            
+            # Take proof screenshot
+            take_screenshot(new_page, f"Task_{i}_Playing_Proof_10s")
+            
+            # Calculate remaining time (Total - 10s we already waited)
+            remaining_time = (task_data['duration'] + random.randint(2, 5)) - 10
+            if remaining_time < 0: remaining_time = 0
+            
+            for sec in range(remaining_time):
                 if not bot_status["is_running"]: 
                     new_page.close()
                     return
                 if sec % 5 == 0: 
-                    bot_status["step"] = f"Watching... {sec}/{wait_time}s"
+                    bot_status["step"] = f"Watching... {sec}/{remaining_time}s"
                     try: new_page.mouse.move(random.randint(100, 800), random.randint(100, 600), steps=5)
                     except: pass
                 time.sleep(1)
@@ -241,19 +270,17 @@ def process_youtube_tasks(context, page):
             time.sleep(5)
             break
 
-    # --- LOGOUT SYSTEM (Added Here) ---
+    # Logout System
     if bot_status["is_running"]:
-        print("Tasks finished. Initiating Logout...")
+        print("Tasks finished. Logging Out...")
         bot_status["step"] = "Logging Out..."
         try:
             page.goto("https://aviso.bz/logout")
-            time.sleep(5) # Wait for logout to complete
+            time.sleep(5)
             take_screenshot(page, "Logout_Done")
-            save_debug_html(page, "Logout_Success")
-        except Exception as e:
-            print(f"Logout Error: {e}")
+        except: pass
 
-# --- MAIN RUNNER ---
+# --- MAIN RUNNER (With Proxy Support) ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
@@ -262,10 +289,20 @@ def run_infinite_loop(username, password):
     bot_status["is_running"] = True
     bot_status["needs_code"] = False
     shared_data["otp_code"] = None
+    
+    # Check Proxy
+    proxy_config = get_proxy_config()
+    if proxy_config:
+        print(f"🌍 Using Proxy: {proxy_config['server']}")
+        bot_status["proxy_status"] = f"Proxy: {proxy_config['server']}"
+    else:
+        print("🌐 Using Direct Connection")
+        bot_status["proxy_status"] = "Direct IP"
 
     with sync_playwright() as p:
         while bot_status["is_running"]:
             try:
+                # --- DESKTOP MODE WITH PROXY ---
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
@@ -274,6 +311,7 @@ def run_infinite_loop(username, password):
                     device_scale_factor=1,
                     is_mobile=False,
                     has_touch=False,
+                    proxy=proxy_config, # <--- HERE IS THE PROXY
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--disable-background-timer-throttling",
@@ -310,8 +348,7 @@ def run_infinite_loop(username, password):
 
                     if page.is_visible("input[name='username']"):
                         if "подождите" not in page.content().lower():
-                            print("Button didn't work. Trying Force Submit...")
-                            bot_status["step"] = "Force Submitting..."
+                            print("Button didn't work. Force Submit...")
                             page.evaluate("document.querySelector('form[action*=\"login\"]').submit()")
                             time.sleep(8)
 
@@ -319,7 +356,6 @@ def run_infinite_loop(username, password):
                         bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
                         take_screenshot(page, "OTP_Needed")
-                        
                         while shared_data["otp_code"] is None:
                             time.sleep(1)
                             if not bot_status["is_running"]: break
@@ -358,6 +394,24 @@ def run_infinite_loop(username, password):
 # --- ROUTES ---
 @app.route('/')
 def index(): return render_template('index.html')
+
+# --- PROXY ROUTES ---
+@app.route('/save_proxy', methods=['POST'])
+def save_proxy():
+    data = request.json
+    proxy_str = data.get('proxy', '').strip()
+    if proxy_str:
+        with open(PROXY_FILE, "w") as f:
+            f.write(proxy_str)
+        return jsonify({"status": "Proxy Saved! Restart Bot."})
+    return jsonify({"status": "Invalid Proxy"})
+
+@app.route('/clear_proxy', methods=['POST'])
+def clear_proxy():
+    if os.path.exists(PROXY_FILE):
+        os.remove(PROXY_FILE)
+        return jsonify({"status": "Proxy Cleared! Using Direct IP."})
+    return jsonify({"status": "No Proxy Found."})
 
 @app.route('/submit_code', methods=['POST'])
 def submit_code_api():
