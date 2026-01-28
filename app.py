@@ -35,14 +35,13 @@ def take_screenshot(page, name):
         bot_status["images"].append(filename)
     except: pass
 
-# --- CONTINUOUS LOGGING ---
 def save_debug_html(page, step_name):
     try:
         content = page.content()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         separator = f"""
         \n\n<div style="background:#111;color:#0f0;padding:15px;margin:20px;border:3px solid #0f0;font-family:monospace;">
-            🖥️ DESKTOP ACTION: {step_name} <br> 🕒 TIME: {timestamp}
+            🖥️ ACTION: {step_name} <br> 🕒 TIME: {timestamp}
         </div>\n\n"""
         with open(DEBUG_FILE, "a", encoding="utf-8") as f:
             f.write(separator + content)
@@ -51,24 +50,17 @@ def save_debug_html(page, step_name):
 def reset_debug_log():
     try:
         with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-            f.write("<h1>💻 AVISO DESKTOP BOT STARTED</h1>")
+            f.write("<h1>💻 AVISO PRO BOT LOG</h1>")
     except: pass
 
-# --- DESKTOP STEALTH (Windows 11 Style) ---
+# --- PC STEALTH ---
 def apply_desktop_stealth(page):
     try:
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        # Fake Plugins to look like a real PC
-        page.add_init_script("""
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-            Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru', 'en-US', 'en']});
-        """)
-        
-        # Heavy Desktop Headers
         page.set_extra_http_headers({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-            "sec-ch-ua": '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
-            "sec-ch-ua-mobile": "?0", # Important: Not Mobile
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "sec-ch-ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+            "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
             "Upgrade-Insecure-Requests": "1"
@@ -83,6 +75,7 @@ def get_best_task_via_js(page):
             if (table.offsetParent === null) continue;
             const rect = table.getBoundingClientRect();
             if (rect.height === 0 || rect.width === 0) continue; 
+            
             const style = window.getComputedStyle(table);
             if (style.display === 'none' || style.visibility === 'hidden') continue;
 
@@ -103,58 +96,40 @@ def get_best_task_via_js(page):
         return null; 
     }""")
 
-# --- MOUSE CLICK (Human Simulation) ---
+# --- MOUSE ACTION ---
 def perform_mouse_click(page, selector, screenshot_name):
     try:
         if not page.is_visible(selector): return False
         box = page.locator(selector).bounding_box()
         if box:
-            # Calculate Center
-            x = box['x'] + box['width'] / 2 + random.uniform(-10, 10)
-            y = box['y'] + box['height'] / 2 + random.uniform(-5, 5)
+            x = box['x'] + box['width'] / 2
+            y = box['y'] + box['height'] / 2
             
-            print(f"Mouse moving to: {x:.0f}, {y:.0f}")
-            
-            # 1. VISUAL RED DOT (Cursor Indicator)
             page.evaluate(f"""() => {{
                 const d = document.createElement('div');
                 d.id = 'mouse-dot';
                 d.style.position = 'fixed'; 
                 d.style.left = '{x}px'; d.style.top = '{y}px';
-                d.style.width = '12px'; d.style.height = '12px';
-                d.style.background = 'transparent';
-                d.style.border = '2px solid red';
-                d.style.borderRadius = '50%';
-                d.style.zIndex = '9999999';
-                d.style.pointerEvents = 'none';
+                d.style.width = '10px'; d.style.height = '10px';
+                d.style.background = 'red'; d.style.borderRadius = '50%';
+                d.style.zIndex = '9999';
                 document.body.appendChild(d);
             }}""")
             
-            # 2. REAL MOUSE MOVEMENT (Hover effect)
-            page.mouse.move(x, y, steps=10) # Smooth move
-            time.sleep(0.3)
-            
+            page.mouse.move(x, y)
+            time.sleep(0.5)
             take_screenshot(page, screenshot_name)
-            
-            # 3. CLICK
             page.mouse.click(x, y)
-            
-            # Cleanup
-            page.evaluate("if(document.getElementById('mouse-dot')) document.getElementById('mouse-dot').remove();")
+            page.evaluate("document.getElementById('mouse-dot')?.remove()")
             return True
-    except Exception as e: print(f"Mouse Error: {e}")
+    except: pass
     return False
 
-# --- AUTO PLAY (Desktop) ---
+# --- AUTO PLAY ---
 def ensure_video_playing(page):
     try:
-        # On Desktop, spacebar often toggles play
         page.keyboard.press("Space")
-        # Or click the big button
-        page.evaluate("""() => {
-            const btn = document.querySelector('.ytp-large-play-button');
-            if(btn) btn.click();
-        }""")
+        page.evaluate("document.querySelector('.ytp-large-play-button')?.click()")
     except: pass
 
 # --- PROCESS TASKS ---
@@ -166,7 +141,7 @@ def process_youtube_tasks(context, page):
     if page.is_visible("input[name='username']"): return
 
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
-    save_debug_html(page, "Task_List_Page")
+    save_debug_html(page, "Tasks_Loaded")
     take_screenshot(page, "0_Task_List")
 
     for i in range(1, 31): 
@@ -176,28 +151,26 @@ def process_youtube_tasks(context, page):
         task_data = get_best_task_via_js(page)
         
         if not task_data:
-            print("No tasks found.")
-            save_debug_html(page, "No_Tasks")
+            print("No tasks.")
+            save_debug_html(page, "No_Tasks_Found")
             bot_status["step"] = "No Tasks Visible."
             break
             
         print(f"Task: {task_data['id']} ({task_data['duration']}s)")
         
         try:
-            # Scroll nicely like a user
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{behavior: 'smooth', block: 'center'}});")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_Target")
 
-            # --- MOUSE CLICK START ---
+            # START
             initial_pages = len(context.pages)
-            if not perform_mouse_click(page, task_data['startSelector'], f"Task_{i}_Click_Start"):
+            if not perform_mouse_click(page, task_data['startSelector'], f"Task_{i}_Start"):
                 page.reload()
                 continue
             
             time.sleep(5)
             if len(context.pages) == initial_pages:
-                # Retry with JS if mouse fails
                 page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
                 time.sleep(5)
                 if len(context.pages) == initial_pages:
@@ -209,13 +182,11 @@ def process_youtube_tasks(context, page):
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # Mouse Jiggle (Anti-Idle)
-            try: new_page.mouse.move(500, 500); new_page.mouse.move(600, 400)
+            try: new_page.mouse.move(500, 500)
             except: pass
 
             time.sleep(2)
             try:
-                # Desktop VPN warning might be different, but keeping check
                 if new_page.is_visible("button:has-text('Я ознакомлен')"):
                     perform_mouse_click(new_page, "button:has-text('Я ознакомлен')", f"Task_{i}_VPN")
             except: pass
@@ -230,8 +201,7 @@ def process_youtube_tasks(context, page):
                     return
                 if sec % 5 == 0: 
                     bot_status["step"] = f"Watching... {sec}/{wait_time}s"
-                    # Small mouse movements
-                    try: new_page.mouse.move(random.randint(200,800), random.randint(200,600))
+                    try: new_page.mouse.move(random.randint(100,800), random.randint(100,600))
                     except: pass
                 time.sleep(1)
 
@@ -251,11 +221,10 @@ def process_youtube_tasks(context, page):
                 time.sleep(1)
             
             if btn_visible:
-                perform_mouse_click(page, confirm_selector, f"Task_{i}_Click_Confirm")
+                perform_mouse_click(page, confirm_selector, f"Task_{i}_Confirm")
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_Success")
                 bot_status["step"] = f"Task #{i} Done!"
-                save_debug_html(page, f"Task_{i}_Success")
             else:
                 page.reload()
                 time.sleep(3)
@@ -285,22 +254,18 @@ def run_infinite_loop(username, password):
     with sync_playwright() as p:
         while bot_status["is_running"]:
             try:
-                # --- DESKTOP CONFIGURATION ---
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
-                    # Windows 10 User Agent
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-                    viewport={"width": 1920, "height": 1080}, # FULL HD
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080},
                     device_scale_factor=1,
-                    is_mobile=False, # IMPORTANT: PC Mode
-                    has_touch=False, # IMPORTANT: Mouse Mode
+                    is_mobile=False,
+                    has_touch=False,
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--disable-background-timer-throttling",
-                        "--disable-renderer-backgrounding",
-                        "--start-maximized", # Full Window
-                        "--lang=ru-RU,ru"
+                        "--start-maximized"
                     ]
                 )
                 current_browser_context = context
@@ -308,38 +273,43 @@ def run_infinite_loop(username, password):
                 page = context.new_page()
                 apply_desktop_stealth(page)
                 
-                bot_status["step"] = "Opening Login (PC)..."
+                bot_status["step"] = "Login Page..."
                 page.goto("https://aviso.bz/login", timeout=60000)
-                save_debug_html(page, "PC_Login_Page")
+                save_debug_html(page, "Login_Page")
                 
                 if page.is_visible("input[name='username']"):
-                    # Type credentials
-                    page.click("input[name='username']")
-                    page.type("input[name='username']", username, delay=100)
-                    time.sleep(0.5)
-                    page.click("input[name='password']")
-                    page.type("input[name='password']", password, delay=100)
-                    time.sleep(1)
+                    page.fill("input[name='username']", username)
+                    page.fill("input[name='password']", password)
+                    take_screenshot(page, "Credentials_Filled")
 
+                    # --- STRATEGY 1: ENTER KEY ---
                     bot_status["step"] = "Pressing Enter..."
                     page.press("input[name='password']", "Enter")
-                    
                     time.sleep(5)
-                    take_screenshot(page, "Login_Attempt")
-                    save_debug_html(page, "After_Login_Enter")
-
-                    # Check for loading
-                    try:
+                    
+                    # --- STRATEGY 2: JS FORCE SUBMIT (The Fix) ---
+                    if page.is_visible("input[name='username']"):
+                        print("Enter failed. Forcing JS Submit...")
+                        bot_status["step"] = "Force Submitting..."
+                        
+                        # Check if loading
                         if "подождите" in page.content().lower():
-                            bot_status["step"] = "Loading... (Wait 5s)"
-                            time.sleep(5)
-                    except: pass
+                            bot_status["step"] = "Loading... Please Wait"
+                            time.sleep(10)
+                        
+                        # براہ راست فارم سبمٹ (No Button Click Needed)
+                        page.evaluate("""
+                            const form = document.querySelector('form[action*="login"]');
+                            if(form) form.submit();
+                            else document.querySelector('button[type="submit"]').click();
+                        """)
+                        time.sleep(8)
 
-                    # OTP Logic
+                    # OTP Check
                     if page.is_visible("input[name='code']"):
                         bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
-                        take_screenshot(page, "Code_Required")
+                        take_screenshot(page, "OTP_Needed")
                         
                         while shared_data["otp_code"] is None:
                             time.sleep(1)
@@ -352,20 +322,12 @@ def run_infinite_loop(username, password):
                             bot_status["needs_code"] = False
                             shared_data["otp_code"] = None
 
-                    # If still on login, click button
-                    if page.is_visible("input[name='username']") and not page.is_visible("input[name='code']"):
-                         print("Clicking Button...")
-                         btn = page.locator("button:has-text('Войти')")
-                         if btn.count() > 0:
-                             perform_mouse_click(page, "button:has-text('Войти')", "Login_Click")
-                         else:
-                             page.locator("button[type='submit']").click()
-                         
-                         time.sleep(5)
-                         if page.is_visible("input[name='username']"):
-                             print("Login failed.")
-                             context.close()
-                             continue
+                    if page.is_visible("input[name='username']"):
+                        print("Login failed.")
+                        bot_status["step"] = "Login Failed. Retrying..."
+                        save_debug_html(page, "Login_Failed_Final")
+                        context.close()
+                        continue
                 
                 bot_status["step"] = "Login Success!"
                 take_screenshot(page, "Login_Success")
