@@ -3,6 +3,7 @@ import time
 import json
 import threading
 import random
+import shutil
 from flask import Flask, render_template, request, jsonify, send_file
 
 app = Flask(__name__)
@@ -39,17 +40,30 @@ def save_debug_html(page):
             f.write(content)
     except: pass
 
-# --- MOBILE STEALTH ---
+# --- ULTIMATE STEALTH (Anti-Detect) ---
 def apply_mobile_stealth(page):
     try:
+        # 1. Override Webdriver Flag
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        # 2. Fake Plugins & Languages
         page.add_init_script("""
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });
-            window.ontouchstart = true;
+            Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru', 'en-US', 'en']});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
         """)
+        
+        # 3. Mobile Emulation Headers
+        page.set_extra_http_headers({
+            "User-Agent": "Mozilla/5.0 (Linux; Android 14; 23124RN87G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.100 Mobile Safari/537.36",
+            "sec-ch-ua": '"Not A(Brand";v="99", "Android WebView";v="133", "Chromium";v="133"',
+            "sec-ch-ua-mobile": "?1",
+            "sec-ch-ua-platform": '"Android"',
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Upgrade-Insecure-Requests": "1"
+        })
     except: pass
 
-# --- JS SCANNER (Visual Only) ---
+# --- JS SCANNER ---
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
@@ -85,41 +99,72 @@ def get_best_task_via_js(page):
         return null; 
     }""")
 
-# --- PURE JS CLICK ---
-def perform_js_click(page, selector):
+# --- VISUAL TOUCH (The Red Dot) ---
+def perform_visual_touch(page, selector, screenshot_name):
     try:
-        print(f"JS Click: {selector}")
-        result = page.evaluate(f"""() => {{
-            const el = document.querySelector('{selector}');
-            if (el) {{ el.click(); return true; }}
-            return false;
-        }}""")
-        return result
-    except: return False
+        box = page.locator(selector).bounding_box()
+        if box:
+            # Center + Micro Randomness
+            center_x = box['x'] + box['width'] / 2
+            center_y = box['y'] + box['height'] / 2
+            
+            # Safe zone 30% from center
+            safe_w = box['width'] * 0.3
+            safe_h = box['height'] * 0.3
+            
+            x = center_x + random.uniform(-safe_w, safe_w)
+            y = center_y + random.uniform(-safe_h, safe_h)
+            
+            print(f"Aiming: {x:.1f}, {y:.1f}")
 
-# --- VIDEO AUTO PLAY ---
-def ensure_video_playing_js(new_page):
+            # 1. SHOW RED DOT
+            page.evaluate(f"""() => {{
+                const d = document.createElement('div');
+                d.id = 'aim-dot';
+                d.style.position = 'fixed'; // Fixed better for scroll
+                d.style.left = '{x-6}px';
+                d.style.top = '{y-6}px';
+                d.style.width = '12px';
+                d.style.height = '12px';
+                d.style.background = 'red';
+                d.style.border = '2px solid yellow';
+                d.style.borderRadius = '50%';
+                d.style.zIndex = '2147483647';
+                d.style.pointerEvents = 'none';
+                document.body.appendChild(d);
+            }}""")
+
+            # 2. Wait & Snap
+            time.sleep(0.5) 
+            take_screenshot(page, screenshot_name)
+            
+            # 3. REAL TOUCH
+            page.touchscreen.tap(x, y)
+            
+            # 4. Remove Dot
+            page.evaluate("if(document.getElementById('aim-dot')) document.getElementById('aim-dot').remove();")
+            return True
+    except Exception as e:
+        print(f"Touch Error: {e}")
+    return False
+
+# --- AUTO PLAY ---
+def ensure_video_playing(page):
     try:
-        new_page.evaluate("""() => {
-            const playBtn = document.querySelector('.ytp-large-play-button') || document.querySelector('button[aria-label="Play"]');
-            if (playBtn) playBtn.click();
-            else {
-                const video = document.querySelector('video');
-                if (video) video.play();
-            }
+        # JS Click is safer for Play button
+        page.evaluate("""() => {
+            const btn = document.querySelector('.ytp-large-play-button') || document.querySelector('button[aria-label="Play"]');
+            if(btn) btn.click();
         }""")
     except: pass
 
-# --- PROCESS LOGIC ---
+# --- PROCESS ---
 def process_youtube_tasks(context, page):
-    bot_status["step"] = "Checking Tasks..."
+    bot_status["step"] = "Opening Task List..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
-    # لاگ ان چیک (تاکہ ٹاسک لسٹ کے بجائے لاگ ان پیج نہ کیپچر ہو)
-    if page.is_visible("input[name='username']"):
-        print("Logged out detected inside task loop.")
-        return # واپس مین لوپ میں بھیج دیں
+    if page.is_visible("input[name='username']"): return
 
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
     take_screenshot(page, "0_Task_List")
@@ -127,38 +172,43 @@ def process_youtube_tasks(context, page):
     for i in range(1, 31): 
         if not bot_status["is_running"]: break
         
-        bot_status["step"] = f"Scanning Active Task #{i}..."
+        bot_status["step"] = f"Scanning Task #{i}..."
         task_data = get_best_task_via_js(page)
         
         if not task_data:
-            print("No visible tasks. Saving debug...")
+            print("No visible tasks.")
             save_debug_html(page)
-            bot_status["step"] = "No Tasks Left."
+            bot_status["step"] = "No Tasks Visible."
             break
             
-        print(f"Target: {task_data['id']} ({task_data['duration']}s)")
+        print(f"Task: {task_data['id']} ({task_data['duration']}s)")
         bot_status["step"] = f"Task #{i}: {task_data['duration']}s"
 
         try:
             # Highlight
-            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '4px solid red';")
+            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '3px solid red';")
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_1_Target")
 
-            # --- CLICK ---
+            # --- VISUAL CLICK START ---
             initial_pages = len(context.pages)
-            perform_js_click(page, task_data['startSelector'])
+            
+            if not perform_visual_touch(page, task_data['startSelector'], f"Task_{i}_2_Aim_Start"):
+                print("Touch failed. Skipping.")
+                page.reload()
+                continue
+            
             time.sleep(5)
 
+            # Check if tab opened
             if len(context.pages) == initial_pages:
-                print("Click failed. Retrying...")
-                perform_js_click(page, task_data['startSelector'])
+                print("Click missed. JS Backup...")
+                page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
                 time.sleep(5)
                 if len(context.pages) == initial_pages:
-                    print("Task dead. Refreshing.")
+                    print("Dead link. Refreshing.")
                     page.reload()
-                    time.sleep(3)
                     continue
 
             new_page = context.pages[-1]
@@ -167,18 +217,17 @@ def process_youtube_tasks(context, page):
             new_page.bring_to_front()
             
             time.sleep(2)
+            # Remove VPN/Overlay
             try:
-                new_page.evaluate("""() => {
-                    const btn = document.querySelector("button:contains('Я ознакомлен')") || document.querySelector("a.tr_but_b");
-                    if(btn) btn.click();
-                }""")
-                time.sleep(2)
+                if new_page.is_visible("button:has-text('Я ознакомлен')"):
+                    perform_visual_touch(new_page, "button:has-text('Я ознакомлен')", f"Task_{i}_VPN_Click")
+                    time.sleep(2)
             except: pass
 
-            ensure_video_playing_js(new_page)
-            take_screenshot(new_page, f"Task_{i}_2_Video")
+            ensure_video_playing(new_page)
+            take_screenshot(new_page, f"Task_{i}_3_Video_Open")
             
-            wait_time = task_data['duration'] + random.randint(5, 8)
+            wait_time = task_data['duration'] + random.randint(6, 12) # Extra random buffer
             for sec in range(wait_time):
                 if not bot_status["is_running"]: 
                     new_page.close()
@@ -189,33 +238,30 @@ def process_youtube_tasks(context, page):
             new_page.close()
             page.bring_to_front()
             time.sleep(1)
-            take_screenshot(page, f"Task_{i}_3_Back")
+            take_screenshot(page, f"Task_{i}_4_Back_Main")
 
             confirm_selector = task_data['confirmSelector']
-            bot_status["step"] = "Waiting for Confirm..."
+            bot_status["step"] = "Confirming..."
             
+            # Button Wait
             btn_visible = False
-            for _ in range(5):
-                visible = page.evaluate(f"""() => {{
-                    const el = document.querySelector('{confirm_selector}');
-                    return el && el.offsetParent !== null;
-                }}""")
-                if visible:
+            for _ in range(8): # 8 sec wait
+                if page.is_visible(confirm_selector):
                     btn_visible = True
                     break
                 time.sleep(1)
             
             if btn_visible:
-                perform_js_click(page, confirm_selector)
+                perform_visual_touch(page, confirm_selector, f"Task_{i}_5_Aim_Confirm")
                 time.sleep(5)
-                take_screenshot(page, f"Task_{i}_4_Success")
+                take_screenshot(page, f"Task_{i}_6_Success")
                 bot_status["step"] = f"Task #{i} Done!"
             else:
                 print("Confirm missing.")
                 bot_status["step"] = "Confirm Missing. Refreshing..."
-                page.reload() 
+                page.reload()
                 time.sleep(3)
-                break
+                break # Refresh list
 
         except Exception as e:
             print(f"Task error: {e}")
@@ -226,7 +272,7 @@ def process_youtube_tasks(context, page):
             break
 
     if bot_status["is_running"]:
-        print("Cycle done. Logging out.")
+        print("Cycle finished. Logging out.")
         page.goto("https://aviso.bz/logout")
 
 # --- MAIN RUNNER ---
@@ -244,7 +290,7 @@ def run_infinite_loop(username, password):
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
-                    user_agent="Mozilla/5.0 (Linux; Android 14; 2409BRN2CG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36",
+                    user_agent="Mozilla/5.0 (Linux; Android 14; 23124RN87G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.100 Mobile Safari/537.36",
                     viewport={"width": 412, "height": 915},
                     device_scale_factor=2.625,
                     is_mobile=True,
@@ -255,49 +301,24 @@ def run_infinite_loop(username, password):
                 page = context.new_page()
                 apply_mobile_stealth(page)
                 
-                # --- ROBUST LOGIN ---
-                logged_in = False
+                bot_status["step"] = "Logging In..."
+                page.goto("https://aviso.bz/login", timeout=60000)
                 
-                while not logged_in and bot_status["is_running"]:
-                    bot_status["step"] = "Opening Login Page..."
-                    page.goto("https://aviso.bz/login", timeout=60000)
-                    page.wait_for_load_state("networkidle")
-
-                    if page.url != "https://aviso.bz/login" and not page.is_visible("input[name='username']"):
-                         print("Already logged in.")
-                         logged_in = True
-                         break
-
-                    print("Typing Credentials...")
-                    
-                    # 1. Username
+                if page.is_visible("input[name='username']"):
+                    # Type Human-like
                     page.click("input[name='username']")
-                    page.type("input[name='username']", username, delay=100) # 100ms delay per char
+                    page.type("input[name='username']", username, delay=120)
                     time.sleep(0.5)
-
-                    # 2. Password
                     page.click("input[name='password']")
-                    page.type("input[name='password']", password, delay=100)
-                    time.sleep(0.5)
+                    page.type("input[name='password']", password, delay=120)
+                    time.sleep(1)
 
-                    # 3. VERIFY FIELDS
-                    val_u = page.input_value("input[name='username']")
-                    val_p = page.input_value("input[name='password']")
-                    
-                    if not val_u or not val_p:
-                        print("Typing failed. Retrying force fill...")
-                        # Fallback: JS Fill
-                        page.evaluate(f"document.querySelector('input[name=\"username\"]').value = '{username}';")
-                        page.evaluate(f"document.querySelector('input[name=\"password\"]').value = '{password}';")
-                        time.sleep(1)
+                    # Ensure filled
+                    if not page.input_value("input[name='password']"):
+                        page.fill("input[name='password']", password)
 
-                    take_screenshot(page, "Login_Filled")
-                    
                     # Submit
-                    submit_btn = page.locator("button[type='submit'], button:has-text('Войти')")
-                    if submit_btn.count() > 0: submit_btn.first.click()
-                    else: page.locator("input[name='password']").press("Enter")
-                    
+                    page.evaluate("document.querySelector('button[type=\"submit\"]').click()")
                     time.sleep(5)
 
                     if page.is_visible("input[name='code']"):
@@ -305,31 +326,29 @@ def run_infinite_loop(username, password):
                         bot_status["needs_code"] = True
                         take_screenshot(page, "Code_Required")
                         
-                        wait_count = 0
+                        count = 0
                         while shared_data["otp_code"] is None:
                             time.sleep(1)
-                            wait_count += 1
-                            if wait_count > 300 or not bot_status["is_running"]: break
+                            count += 1
+                            if count > 300 or not bot_status["is_running"]: break
                         
                         if shared_data["otp_code"]:
                             page.fill("input[name='code']", shared_data["otp_code"])
-                            page.locator("button[type='submit']").click()
+                            page.evaluate("document.querySelector('button[type=\"submit\"]').click()")
                             time.sleep(8)
                             bot_status["needs_code"] = False
                             shared_data["otp_code"] = None
 
-                    if "login" not in page.url or page.is_visible("#new-money-ballans"):
-                        print("Login Verified!")
-                        logged_in = True
-                        take_screenshot(page, "Login_Verified")
-                    else:
-                        print("Login failed. Retrying loop...")
+                    # Verify Login
+                    if page.is_visible("input[name='username']"):
+                        print("Login failed. Retrying...")
                         bot_status["step"] = "Login Failed. Retrying..."
-                        take_screenshot(page, "Login_Failed")
-                        time.sleep(3)
+                        time.sleep(5)
+                        context.close()
+                        continue
                 
-                if logged_in and bot_status["is_running"]:
-                    process_youtube_tasks(context, page)
+                take_screenshot(page, "Login_Success")
+                process_youtube_tasks(context, page)
                 
                 context.close()
                 
@@ -367,6 +386,24 @@ def start_bot():
 def stop_bot():
     bot_status["is_running"] = False
     return jsonify({"status": "Stopping..."})
+
+# --- NEW: CLEAR DATA ROUTE ---
+@app.route('/clear_data', methods=['POST'])
+def clear_data_route():
+    try:
+        # Stop bot first
+        bot_status["is_running"] = False
+        time.sleep(2) # Give it time to close
+        
+        if os.path.exists(USER_DATA_DIR):
+            shutil.rmtree(USER_DATA_DIR)
+            os.makedirs(USER_DATA_DIR, exist_ok=True)
+            print("Browser data wiped.")
+            return jsonify({"status": "Data Wiped Successfully"})
+        else:
+            return jsonify({"status": "No Data Found"})
+    except Exception as e:
+        return jsonify({"status": f"Error: {str(e)}"})
 
 @app.route('/status')
 def status(): return jsonify(bot_status)
