@@ -5,87 +5,73 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gmail Login Center</title>
     <style>
-        body { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-        .card { background: #1e1e1e; padding: 25px; border-radius: 12px; border: 1px solid #333; width: 100%; max-width: 600px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        h2 { color: #ea4335; margin-top: 0; text-align: center; } /* Google Red */
-        
-        input { width: 100%; padding: 12px; margin: 8px 0; background: #2c2c2c; border: 1px solid #444; color: white; border-radius: 6px; box-sizing: border-box; }
-        
-        button { width: 100%; padding: 14px; margin-top: 15px; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        body { background: #1a1a1a; color: #fff; font-family: sans-serif; padding: 20px; text-align: center; }
+        .container { max-width: 600px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 10px; border: 1px solid #444; }
+        input { width: 90%; padding: 10px; margin: 10px 0; background: #000; border: 1px solid #555; color: #fff; border-radius: 5px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 5px; border: none; font-weight: bold; }
         .btn-start { background: #4285f4; color: white; }
-        .btn-stop { background: #ea4335; color: white; margin-top: 10px; }
-        .btn-home { background: #333; color: #aaa; margin-bottom: 20px; width: auto; padding: 8px 16px; }
-
-        #live-view { margin-top: 20px; text-align: center; }
-        #live-img { width: 100%; border-radius: 8px; border: 2px solid #555; min-height: 200px; background: #000; }
+        .btn-stop { background: #ea4335; color: white; }
+        .btn-home { background: #555; color: white; margin-bottom: 20px; }
         
-        .status-bar { margin-top: 10px; padding: 10px; background: #252526; border-radius: 6px; font-family: monospace; color: #4caf50; border: 1px dashed #444; }
+        #log-box { margin: 15px 0; padding: 10px; background: #000; color: #0f0; font-family: monospace; border: 1px dashed #0f0; }
+        #screen-view img { max-width: 100%; border: 2px solid #fff; margin-top: 10px; }
     </style>
 </head>
 <body>
 
-    <button class="btn-home" onclick="window.location.href='/'">⬅ Back to Dashboard</button>
+    <button class="btn-home" onclick="window.location.href='/'">⬅ Back to Aviso Bot</button>
 
-    <div class="card">
-        <h2>📧 Google Login Manager</h2>
-        <p style="font-size:12px; color:#888; text-align:center;">Cookies will be saved to Aviso Bot volume.</p>
+    <div class="container">
+        <h2 style="color: #4285f4;">📧 Gmail Secure Login</h2>
+        <p style="font-size: 12px; color: #aaa;">This uses the same browser session as the main bot.</p>
 
-        <input type="email" id="email" placeholder="Enter Gmail Address">
-        <input type="password" id="password" placeholder="Enter Password">
+        <input type="text" id="email" placeholder="Gmail Address">
+        <input type="password" id="password" placeholder="Password">
+        <br>
+        <button class="btn-start" onclick="startGmail()">🚀 Launch Browser & Login</button>
+        <button class="btn-stop" onclick="stopGmail()">🛑 Stop / Finish</button>
 
-        <button class="btn-start" onclick="startLogin()">🚀 Start Login Process</button>
-        <button class="btn-stop" onclick="stopLogin()">🛑 Stop / Done</button>
+        <div id="log-box">Waiting...</div>
 
-        <div class="status-bar" id="status-text">Ready.</div>
-
-        <div id="live-view">
-            <h3>🔴 Live Screen (Updates every 2s)</h3>
-            <img id="live-img" src="" alt="Waiting for stream...">
+        <div id="screen-view">
+            <h3>🔴 Live View (Updates every 3s)</h3>
+            <img id="live-img" src="" alt="Screen will appear here...">
         </div>
     </div>
 
     <script>
-        let intervalId = null;
+        let interval;
 
-        function startLogin() {
-            const e = document.getElementById('email').value;
-            const p = document.getElementById('password').value;
-            if(!e || !p) return alert("Please fill fields");
-
+        function startGmail() {
+            let e = document.getElementById("email").value;
+            let p = document.getElementById("password").value;
+            
             fetch('/start_gmail', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({email: e, password: p})
-            }).then(r => r.json()).then(d => {
-                alert(d.status);
-                if(d.status === "Started") startPolling();
-            });
+            }).then(r => r.json()).then(d => alert(d.status));
+
+            startPolling();
         }
 
-        function stopLogin() {
-            fetch('/stop_gmail', {method: 'POST'});
-            clearInterval(intervalId);
-            document.getElementById('status-text').innerText = "Stopped.";
+        function stopGmail() {
+            fetch('/stop_gmail', {method: 'POST'}).then(r => r.json()).then(d => alert(d.status));
         }
 
         function startPolling() {
-            if(intervalId) clearInterval(intervalId);
-            intervalId = setInterval(() => {
+            if(interval) clearInterval(interval);
+            interval = setInterval(() => {
                 fetch('/gmail_status').then(r => r.json()).then(data => {
-                    document.getElementById('status-text').innerText = data.step;
-                    
-                    if(data.screenshot && data.screenshot !== "placeholder.png") {
-                        const img = document.getElementById('live-img');
-                        // Add random query param to force refresh image
-                        img.src = `/static/screenshots/${data.screenshot}?t=${new Date().getTime()}`;
+                    document.getElementById("log-box").innerText = data.log;
+                    if(data.screenshot) {
+                        document.getElementById("live-img").src = "/static/screenshots/" + data.screenshot + "?t=" + new Date().getTime();
                     }
-
-                    if(!data.active && data.step.includes("Closed")) {
-                        clearInterval(intervalId);
-                    }
+                    if(!data.is_active && data.log.includes("Closed")) clearInterval(interval);
                 });
-            }, 2000); // 2 Second Refresh Rate
+            }, 3000);
         }
     </script>
+
 </body>
 </html>
