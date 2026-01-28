@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Aviso Diagnostic Bot</title>
+    <title>Aviso Ultra Bot v8.0</title>
     <style>
-        body { font-family: 'Courier New', Courier, monospace; background-color: #0d0d0d; color: #00ff41; padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        body { font-family: 'Courier New', monospace; background: #0d0d0d; color: #00ff41; padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
         .container { width: 100%; max-width: 500px; background: #1a1a1a; padding: 20px; border-radius: 15px; border: 1px solid #333; }
         input { width: 100%; padding: 15px; margin: 8px 0; background: #000; border: 1px solid #444; color: white; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
         
@@ -13,9 +13,9 @@
         .mode-start { background: linear-gradient(45deg, #006400, #00ff41); color: black; }
         .mode-stop { background: linear-gradient(45deg, #8b0000, #ff0000); color: white; }
         
-        /* New Download Button */
-        .btn-log { background: #2196F3; color: white; margin-top: 5px; font-size: 14px; padding: 10px; }
-
+        .btn-log { background: #2196F3; color: white; font-size: 14px; padding: 10px; width: 48%; display: inline-block; }
+        .btn-clear { background: #f44336; color: white; font-size: 14px; padding: 10px; width: 48%; display: inline-block; }
+        
         .status-wrapper { margin-top: 20px; background: #000; border: 1px dashed #00ff41; padding: 15px; border-radius: 8px; }
         .live-status { font-size: 16px; color: #fff; margin-top: 5px; font-weight: bold; }
         
@@ -29,13 +29,17 @@
 <body>
 
     <div class="container">
-        <h2>🔎 Aviso Debugger v7.0</h2>
+        <h2>🤖 Aviso Stealth v8.0</h2>
         
         <input type="text" id="username" placeholder="Username / Email">
         <input type="password" id="password" placeholder="Password">
         
         <button id="actionBtn" class="mode-start" onclick="toggleBot()">🚀 START SYSTEM</button>
-        <button class="btn-log" onclick="window.location.href='/download_log'">📥 Download HTML Log</button>
+        
+        <div style="margin-top: 10px; display: flex; justify-content: space-between;">
+             <button class="btn-log" onclick="window.location.href='/download_log'">📥 Get HTML</button>
+             <button class="btn-clear" onclick="clearData()">🗑️ WIPE DATA</button>
+        </div>
 
         <div id="code-area">
             <h3 style="margin:0 0 10px 0; color:#ffcc00;">🔑 Code Required</h3>
@@ -86,6 +90,14 @@
                     btn.innerText = "🛑 STOPPING...";
                     btn.disabled = true;
                 }
+            }
+        }
+
+        function clearData() {
+            if(confirm("⚠ WARNING: This will delete all cookies and login data. Are you sure?")) {
+                fetch('/clear_data', { method: 'POST' })
+                .then(r => r.json())
+                .then(d => alert(d.status));
             }
         }
 
