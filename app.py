@@ -15,7 +15,7 @@ SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 USER_DATA_DIR = "/app/browser_data2"
 DEBUG_FILE = "debug_source.html"
-PROXY_FILE = "proxy_config.txt"  # فائل جہاں پروکسی سیو ہوگی
+PROXY_FILE = "proxy_config.txt"
 
 # --- Shared State ---
 shared_data = {"otp_code": None}
@@ -31,23 +31,16 @@ bot_status = {
 
 # --- HELPER FUNCTIONS ---
 def get_proxy_config():
-    """
-    یہ فنکشن فائل سے پروکسی پڑھ کر Playwright کے فارمیٹ میں دے گا۔
-    فارمیٹ: ip:port:user:pass یا ip:port
-    """
     if os.path.exists(PROXY_FILE):
         try:
             with open(PROXY_FILE, "r") as f:
                 proxy_str = f.read().strip()
                 if not proxy_str: return None
-                
                 parts = proxy_str.split(":")
                 proxy_dict = {"server": f"http://{parts[0]}:{parts[1]}"}
-                
                 if len(parts) == 4:
                     proxy_dict["username"] = parts[2]
                     proxy_dict["password"] = parts[3]
-                
                 return proxy_dict
         except: return None
     return None
@@ -84,20 +77,14 @@ def get_best_task_via_js(page):
             if (table.offsetParent === null) continue;
             const rect = table.getBoundingClientRect();
             if (rect.height === 0 || rect.width === 0) continue; 
-            
             const style = window.getComputedStyle(table);
             if (style.display === 'none' || style.visibility === 'hidden') continue;
-
             const idPart = table.id.replace('ads-link-', '');
             if (!table.querySelector('.ybprosm')) continue;
-
             const timerInput = document.getElementById('ads_timer_' + idPart);
             const duration = timerInput ? parseInt(timerInput.value) : 20;
-            
             return {
-                id: idPart,
-                duration: duration,
-                tableId: table.id,
+                id: idPart, duration: duration, tableId: table.id,
                 startSelector: '#link_ads_start_' + idPart,
                 confirmSelector: '#ads_btn_confirm_' + idPart
             };
@@ -109,17 +96,16 @@ def get_best_task_via_js(page):
 def perform_human_mouse_click(page, selector, screenshot_name):
     try:
         if not page.is_visible(selector): return False
-        
         box = page.locator(selector).bounding_box()
         if box:
             x = box['x'] + box['width'] / 2 + random.uniform(-15, 15)
             y = box['y'] + box['height'] / 2 + random.uniform(-5, 5)
             
-            print(f"Moving Mouse to: {x:.0f}, {y:.0f}")
-            
+            # Move
             page.mouse.move(x, y, steps=15) 
             time.sleep(0.3)
 
+            # Red Dot
             page.evaluate(f"""() => {{
                 const d = document.createElement('div');
                 d.id = 'click-dot'; d.style.position = 'fixed'; 
@@ -133,6 +119,7 @@ def perform_human_mouse_click(page, selector, screenshot_name):
             
             take_screenshot(page, screenshot_name)
             
+            # Click
             page.mouse.down()
             time.sleep(random.uniform(0.05, 0.15))
             page.mouse.up()
@@ -144,14 +131,58 @@ def perform_human_mouse_click(page, selector, screenshot_name):
         print(f"Mouse Error: {e}")
     return False
 
-# --- AUTO PLAY ---
+# --- FORCE VIDEO PLAY (The Fix) ---
 def ensure_video_playing(page):
+    """
+    یہ فنکشن اب 3 طریقے آزمائے گا ویڈیو چلانے کے لیے۔
+    """
+    bot_status["step"] = "Attempting to Play Video..."
+    print("🎬 Playing Video...")
+    
     try:
-        page.keyboard.press("Space")
-        page.evaluate("document.querySelector('.ytp-large-play-button')?.click()")
-    except: pass
+        # METHOD 1: Click the Red Button specifically
+        if page.is_visible(".ytp-large-play-button"):
+            print("Found Red Button. Clicking...")
+            perform_human_mouse_click(page, ".ytp-large-play-button", "Play_RedButton_Click")
+            time.sleep(2)
+            return
 
-# --- PROCESS TASKS (New Logic: 10s Wait Screenshot) ---
+        # METHOD 2: Click Center of Screen (Most reliable fallback)
+        print("Button selector failed. Clicking CENTER of screen...")
+        viewport = page.viewport_size
+        if viewport:
+            cx = viewport['width'] / 2
+            cy = viewport['height'] / 2
+            
+            # Move to center
+            page.mouse.move(cx, cy, steps=10)
+            
+            # Show dot
+            page.evaluate(f"""() => {{
+                const d = document.createElement('div'); d.id = 'center-dot'; 
+                d.style.position = 'fixed'; d.style.left = '{cx}px'; d.style.top = '{cy}px';
+                d.style.width = '20px'; d.style.height = '20px'; d.style.background = 'blue'; 
+                d.style.borderRadius = '50%'; d.style.zIndex = '9999999';
+                document.body.appendChild(d);
+            }}""")
+            
+            take_screenshot(page, "Play_Center_Click")
+            
+            # Click
+            page.mouse.down()
+            time.sleep(0.2)
+            page.mouse.up()
+            
+            page.evaluate("document.getElementById('center-dot')?.remove()")
+            time.sleep(2)
+
+        # METHOD 3: Keyboard Spacebar (Backup)
+        page.keyboard.press("Space")
+        
+    except Exception as e:
+        print(f"Play Error: {e}")
+
+# --- PROCESS TASKS ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
@@ -190,7 +221,6 @@ def process_youtube_tasks(context, page):
             time.sleep(5)
             
             if len(context.pages) == initial_pages:
-                print("Mouse click missed. Trying JS Force...")
                 page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
                 time.sleep(5)
                 if len(context.pages) == initial_pages:
@@ -210,17 +240,16 @@ def process_youtube_tasks(context, page):
                     perform_human_mouse_click(new_page, "button:has-text('Я ознакомлен')", f"Task_{i}_VPN")
             except: pass
 
+            # --- PLAY THE VIDEO ---
             ensure_video_playing(new_page)
             
-            # --- NEW LOGIC: WAIT 10s & PROVE IT ---
-            bot_status["step"] = "Video Started. Waiting 10s for proof..."
-            print("Video started, waiting 10s...")
+            # --- WAIT 10s & PROOF ---
+            bot_status["step"] = "Checking if playing (10s wait)..."
+            print("Waiting 10s for proof...")
             time.sleep(10)
-            
-            # Take proof screenshot
             take_screenshot(new_page, f"Task_{i}_Playing_Proof_10s")
             
-            # Calculate remaining time (Total - 10s we already waited)
+            # Remaining wait
             remaining_time = (task_data['duration'] + random.randint(2, 5)) - 10
             if remaining_time < 0: remaining_time = 0
             
@@ -257,7 +286,7 @@ def process_youtube_tasks(context, page):
                 bot_status["step"] = f"Task #{i} Done!"
                 save_debug_html(page, f"Task_{i}_Success")
             else:
-                print("Confirm button missing.")
+                print("Confirm missing.")
                 page.reload()
                 time.sleep(3)
                 break
@@ -270,7 +299,6 @@ def process_youtube_tasks(context, page):
             time.sleep(5)
             break
 
-    # Logout System
     if bot_status["is_running"]:
         print("Tasks finished. Logging Out...")
         bot_status["step"] = "Logging Out..."
@@ -280,7 +308,7 @@ def process_youtube_tasks(context, page):
             take_screenshot(page, "Logout_Done")
         except: pass
 
-# --- MAIN RUNNER (With Proxy Support) ---
+# --- MAIN RUNNER ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
@@ -290,7 +318,6 @@ def run_infinite_loop(username, password):
     bot_status["needs_code"] = False
     shared_data["otp_code"] = None
     
-    # Check Proxy
     proxy_config = get_proxy_config()
     if proxy_config:
         print(f"🌍 Using Proxy: {proxy_config['server']}")
@@ -302,7 +329,6 @@ def run_infinite_loop(username, password):
     with sync_playwright() as p:
         while bot_status["is_running"]:
             try:
-                # --- DESKTOP MODE WITH PROXY ---
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
@@ -311,7 +337,7 @@ def run_infinite_loop(username, password):
                     device_scale_factor=1,
                     is_mobile=False,
                     has_touch=False,
-                    proxy=proxy_config, # <--- HERE IS THE PROXY
+                    proxy=proxy_config,
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--disable-background-timer-throttling",
@@ -395,7 +421,6 @@ def run_infinite_loop(username, password):
 @app.route('/')
 def index(): return render_template('index.html')
 
-# --- PROXY ROUTES ---
 @app.route('/save_proxy', methods=['POST'])
 def save_proxy():
     data = request.json
