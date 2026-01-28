@@ -5,6 +5,7 @@ import threading
 import random
 import shutil
 import datetime
+import subprocess
 from flask import Flask, render_template, request, jsonify, send_file
 
 app = Flask(__name__)
@@ -12,15 +13,13 @@ app = Flask(__name__)
 # --- Configuration ---
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-# یہ وہی فولڈر ہے جہاں دونوں سیشن سیو کریں گے
-USER_DATA_DIR = "/app/browser_data2"
+USER_DATA_DIR = "/app/browser_data"
 DEBUG_FILE = "debug_source.html"
 
 # --- Shared State ---
 shared_data = {"otp_code": None}
 current_browser_context = None
 
-# --- STATUS OBJECTS ---
 bot_status = {
     "step": "Idle",
     "images": [],
@@ -34,7 +33,19 @@ gmail_status = {
     "screenshot": "placeholder.png"
 }
 
-# --- HELPER FUNCTIONS ---
+# --- HELPER: KILL STUCK BROWSERS ---
+def kill_all_browsers():
+    """
+    یہ فنکشن پرانے پھنسے ہوئے براؤزرز کو زبردستی بند کرے گا
+    تاکہ 'Session Closed' کا ایرر نہ آئے۔
+    """
+    try:
+        print("🔪 Killing old browser processes...")
+        subprocess.run(["pkill", "-9", "chrome"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-9", "chromium"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2) # سانس لینے کا وقت
+    except: pass
+
 def take_screenshot(page, name):
     try:
         timestamp = int(time.time())
@@ -61,7 +72,7 @@ def reset_debug_log():
     except: pass
 
 # ======================================================
-#  PART 1: AVISO BOT (OLD ENGINE - HUMAN MOUSE)
+#  PART 1: AVISO BOT (OLD PC ENGINE - HUMAN MOUSE)
 # ======================================================
 
 def get_best_task_via_js(page):
@@ -97,7 +108,7 @@ def perform_human_mouse_click(page, selector, screenshot_name):
         if not page.is_visible(selector): return False
         box = page.locator(selector).bounding_box()
         if box:
-            x = box['x'] + box['width'] / 2 + random.uniform(-15, 15)
+            x = box['x'] + box['width'] / 2 + random.uniform(-10, 10)
             y = box['y'] + box['height'] / 2 + random.uniform(-5, 5)
             
             print(f"Moving Mouse to: {x:.0f}, {y:.0f}")
@@ -253,7 +264,9 @@ def run_aviso_bot(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
 
+    kill_all_browsers() # <--- SAFETY FIRST
     reset_debug_log()
+    
     bot_status["is_running"] = True
     bot_status["needs_code"] = False
     shared_data["otp_code"] = None
@@ -262,6 +275,7 @@ def run_aviso_bot(username, password):
         while bot_status["is_running"]:
             try:
                 # --- OLD ROBUST ENGINE FOR AVISO ---
+                # وہی سیٹنگز جو پرانی فائل میں تھیں (PC Mode)
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
@@ -340,7 +354,8 @@ def run_aviso_bot(username, password):
                     time.sleep(1)
 
             except Exception as e:
-                bot_status["step"] = f"Error: {str(e)}"
+                print(f"CRITICAL ERROR: {e}")
+                bot_status["step"] = f"Crash: {str(e)}"
                 try: context.close()
                 except: pass
                 time.sleep(30)
@@ -353,6 +368,7 @@ def run_gmail_process(email, password):
     global current_browser_context, gmail_status
     from playwright.sync_api import sync_playwright
 
+    kill_all_browsers() # <--- SAFETY FIRST
     gmail_status["active"] = True
     gmail_status["step"] = "Launching Stealth Browser..."
 
@@ -494,6 +510,7 @@ def clear_data_route():
     try:
         bot_status["is_running"] = False
         gmail_status["active"] = False
+        kill_all_browsers() # <--- KILL BEFORE WIPE
         if current_browser_context:
             try: current_browser_context.close()
             except: pass
