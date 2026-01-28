@@ -13,7 +13,7 @@ app = Flask(__name__)
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 # یہ وہی فولڈر ہے جہاں دونوں سیشن سیو کریں گے
-USER_DATA_DIR = "/app/browser_data"
+USER_DATA_DIR = "/app/browser_data2"
 DEBUG_FILE = "debug_source.html"
 
 # --- Shared State ---
