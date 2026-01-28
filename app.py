@@ -11,7 +11,7 @@ app = Flask(__name__)
 # --- Configuration ---
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-USER_DATA_DIR = "/app/browser_data2"
+USER_DATA_DIR = "/app/browser_data"
 DEBUG_FILE = "debug_source.html"
 
 # --- Shared State ---
@@ -50,7 +50,7 @@ def apply_mobile_stealth(page):
             "sec-ch-ua": '"Not A(Brand";v="99", "Android WebView";v="133", "Chromium";v="133"',
             "sec-ch-ua-mobile": "?1",
             "sec-ch-ua-platform": '"Android"',
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7", # Russian First
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
             "Upgrade-Insecure-Requests": "1"
         })
     except: pass
@@ -93,7 +93,6 @@ def get_best_task_via_js(page):
 def perform_visual_touch(page, selector, screenshot_name):
     try:
         if not page.is_visible(selector): return False
-
         box = page.locator(selector).bounding_box()
         if box:
             center_x = box['x'] + box['width'] / 2
@@ -243,7 +242,7 @@ def process_youtube_tasks(context, page):
         print("Cycle finished. Logging out.")
         page.goto("https://aviso.bz/logout")
 
-# --- MAIN RUNNER ---
+# --- MAIN RUNNER (With Patience) ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
@@ -278,46 +277,52 @@ def run_infinite_loop(username, password):
                 page = context.new_page()
                 apply_mobile_stealth(page)
                 
-                bot_status["step"] = "Logging In..."
+                bot_status["step"] = "Opening Login Page..."
                 page.goto("https://aviso.bz/login", timeout=60000)
+                page.wait_for_load_state("networkidle")
                 
                 if page.is_visible("input[name='username']"):
                     # Type Credentials
                     page.click("input[name='username']")
-                    page.type("input[name='username']", username, delay=100)
+                    page.type("input[name='username']", username, delay=120)
                     time.sleep(0.5)
                     page.click("input[name='password']")
-                    page.type("input[name='password']", password, delay=100)
+                    page.type("input[name='password']", password, delay=120)
                     time.sleep(1)
 
-                    take_screenshot(page, "Login_Filled")
-                    
-                    # --- FIXED LOGIN CLICK ---
-                    # 1. Try hitting Enter Key (The most reliable way)
+                    # --- PATIENT LOGIN ---
+                    bot_status["step"] = "Pressing Enter & Waiting..."
                     print("Pressing ENTER...")
-                    bot_status["step"] = "Pressing ENTER..."
                     page.press("input[name='password']", "Enter")
                     
-                    time.sleep(5)
-                    
-                    # 2. If still on login page, try clicking Russian button
+                    # 1. WAIT 10 SECONDS (No Activity)
+                    take_screenshot(page, "Login_Processing")
+                    time.sleep(10)
+
+                    # 2. Check for "Loading..." state
+                    try:
+                        # Check if button changed to "Wait" (подождите)
+                        btn_text = page.locator("button[type='submit']").inner_text().lower()
+                        if "подождите" in btn_text:
+                             bot_status["step"] = "Still Loading... Waiting..."
+                             print("System busy, waiting 5s more...")
+                             time.sleep(5)
+                    except: pass
+
+                    # 3. IF STILL ON LOGIN PAGE -> CLICK BUTTON
                     if page.is_visible("input[name='password']"):
-                        print("Enter failed. Clicking 'Войти'...")
-                        bot_status["step"] = "Clicking 'Войти'..."
-                        
-                        # Try finding by Russian Text
-                        btn = page.locator("button:has-text('Войти')")
-                        if btn.count() > 0:
-                            perform_visual_touch(page, "button:has-text('Войти')", "Login_Button_Aim")
-                        else:
-                            # Fallback to Submit Type
-                            perform_visual_touch(page, "button[type='submit']", "Login_Submit_Aim")
-                        
-                        time.sleep(5)
+                         print("Enter failed/timeout. Trying Button Click...")
+                         bot_status["step"] = "Clicking Button 'Войти'..."
+                         
+                         btn = page.locator("button:has-text('Войти')")
+                         if btn.count() > 0:
+                             perform_visual_touch(page, "button:has-text('Войти')", "Login_Btn_Retry")
+                         else:
+                             page.locator("button[type='submit']").click()
+                         
+                         time.sleep(8) # Wait again
 
-                    take_screenshot(page, "After_Login_Attempt")
-
-                    # 2FA / OTP Check
+                    # 2FA Logic
                     if page.is_visible("input[name='code']"):
                         bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
@@ -331,17 +336,15 @@ def run_infinite_loop(username, password):
                         
                         if shared_data["otp_code"]:
                             page.fill("input[name='code']", shared_data["otp_code"])
-                            # Enter key for Code too
                             page.press("input[name='code']", "Enter")
                             time.sleep(8)
                             bot_status["needs_code"] = False
                             shared_data["otp_code"] = None
 
-                    # Verification
+                    # Verify Login
                     if page.is_visible("input[name='username']"):
-                        print("Login failed. Retrying...")
-                        bot_status["step"] = "Login Failed. Retrying..."
-                        take_screenshot(page, "Login_Failed")
+                        print("Login failed completely.")
+                        bot_status["step"] = "Login Failed. Restarting..."
                         time.sleep(5)
                         context.close()
                         continue
