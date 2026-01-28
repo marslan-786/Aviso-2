@@ -406,10 +406,10 @@ def run_infinite_loop(username, password):
                 
                 context.close()
                 print("Waiting 1 hour...")
-                for s in range(3600):
+                for s in range(1200):
                     if not bot_status["is_running"]: return
                     if s % 10 == 0: 
-                        rem = 3600 - s
+                        rem = 1200 - s
                         bot_status["step"] = f"💤 Next Run: {rem // 60}m {rem % 60}s"
                     time.sleep(1)
 
