@@ -20,6 +20,7 @@ DEBUG_FILE = "debug_source.html"
 shared_data = {"otp_code": None}
 current_browser_context = None
 
+# --- STATUS OBJECTS ---
 bot_status = {
     "step": "Idle",
     "images": [],
@@ -29,17 +30,28 @@ bot_status = {
 
 gmail_status = {
     "active": False,
-    "step": "Waiting",
+    "step": "Ready",
     "screenshot": "placeholder.png"
 }
 
-# --- HELPER FUNCTIONS ---
-def kill_all_browsers():
+# --- CRITICAL FIX: FORCE UNLOCK PROFILE ---
+def force_unlock_browser_profile():
+    """
+    یہ فنکشن براؤزر کے 'لاک' کو توڑ دے گا تاکہ 'Undefined' یا کریش نہ ہو۔
+    """
+    lock_file = os.path.join(USER_DATA_DIR, "SingletonLock")
     try:
+        # 1. Kill Processes
         subprocess.run(["pkill", "-9", "chrome"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["pkill", "-9", "chromium"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
-    except: pass
+        time.sleep(1)
+        
+        # 2. Delete Lock File
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+            print("🔓 SingletonLock removed successfully.")
+    except Exception as e:
+        print(f"⚠️ Unlock Warning: {e}")
 
 def take_screenshot(page, name):
     try:
@@ -47,9 +59,8 @@ def take_screenshot(page, name):
         filename = f"{timestamp}_{name}.png"
         path = os.path.join(SCREENSHOT_DIR, filename)
         page.screenshot(path=path)
-        # Aviso Bot uses listing
+        # Update both statuses just in case
         bot_status["images"].append(filename)
-        # Gmail Bot uses single update
         gmail_status["screenshot"] = filename 
         return filename
     except: return None
@@ -66,13 +77,12 @@ def save_debug_html(page, step_name):
 def reset_debug_log():
     try:
         with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-            f.write("<h1>🤖 BOT LOGS STARTED</h1>")
+            f.write("<h1>🤖 AVISO & GMAIL LOGS</h1>")
     except: pass
 
 # ======================================================
-#  PART 1: AVISO BOT (OLD ENGINE - SAME AS BEFORE)
+#  PART 1: AVISO BOT (OLD ENGINE)
 # ======================================================
-# ... (یہ حصہ بالکل وہی پرانا ہے، اسے نہیں چھیڑا تاکہ ٹاسک خراب نہ ہوں) ...
 
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
@@ -133,6 +143,7 @@ def process_youtube_tasks(context, page):
     page.wait_for_load_state("networkidle")
     if page.is_visible("input[name='username']"): return
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
+    save_debug_html(page, "Tasks_Loaded")
     take_screenshot(page, "0_Task_List")
 
     for i in range(1, 31): 
@@ -140,7 +151,7 @@ def process_youtube_tasks(context, page):
         bot_status["step"] = f"Scanning Task #{i}..."
         task_data = get_best_task_via_js(page)
         if not task_data:
-            print("No tasks."); bot_status["step"] = "No Tasks Visible."; break
+            print("No tasks."); save_debug_html(page, "No_Tasks"); bot_status["step"] = "No Tasks Visible."; break
         print(f"Task: {task_data['id']} ({task_data['duration']}s)")
         try:
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{behavior: 'smooth', block: 'center'}});")
@@ -186,14 +197,15 @@ def process_youtube_tasks(context, page):
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_Success")
                 bot_status["step"] = f"Task #{i} Done!"
+                save_debug_html(page, f"Task_{i}_Success")
             else:
-                page.reload(); time.sleep(3); break
+                print("Confirm missing."); page.reload(); time.sleep(3); break
         except Exception as e:
             try: context.pages[-1].close() if len(context.pages) > 1 else None
             except: pass
             page.reload(); time.sleep(5); break
     if bot_status["is_running"]:
-        print("Tasks finished. Logging Out...")
+        print("Logging Out...")
         bot_status["step"] = "Logging Out..."
         try:
             page.goto("https://aviso.bz/logout")
@@ -204,7 +216,7 @@ def process_youtube_tasks(context, page):
 def run_aviso_bot(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
-    kill_all_browsers()
+    force_unlock_browser_profile() # <--- SAFETY UNLOCK
     reset_debug_log()
     bot_status["is_running"] = True
     bot_status["needs_code"] = False
@@ -223,6 +235,7 @@ def run_aviso_bot(username, password):
                 page = context.new_page()
                 bot_status["step"] = "Login Page..."
                 page.goto("https://aviso.bz/login", timeout=60000)
+                save_debug_html(page, "Login_Page")
                 if page.is_visible("input[name='username']"):
                     page.click("input[name='username']")
                     page.type("input[name='username']", username, delay=80)
@@ -235,6 +248,7 @@ def run_aviso_bot(username, password):
                     if not page.is_visible(btn_selector): btn_selector = "button[type='submit']"
                     perform_human_mouse_click(page, btn_selector, "Login_Mouse_Click")
                     time.sleep(5)
+                    take_screenshot(page, "After_Login_Click")
                     if page.is_visible("input[name='username']"):
                         if "подождите" not in page.content().lower():
                             bot_status["step"] = "Force Submitting..."
@@ -253,8 +267,10 @@ def run_aviso_bot(username, password):
                             bot_status["needs_code"] = False; shared_data["otp_code"] = None
                     if page.is_visible("input[name='username']"):
                         bot_status["step"] = "Login Failed. Retrying..."
+                        save_debug_html(page, "Login_Failed")
                         context.close(); continue
                 bot_status["step"] = "Login Success!"
+                take_screenshot(page, "Login_Success")
                 process_youtube_tasks(context, page)
                 context.close()
                 print("Waiting 1 hour...")
@@ -269,109 +285,107 @@ def run_aviso_bot(username, password):
                 time.sleep(30)
 
 # ======================================================
-#  PART 2: GMAIL LOGIN (NEW - GOOGLE HOME STRATEGY)
+#  PART 2: GMAIL LOGIN (GOOGLE HOME STRATEGY)
 # ======================================================
 
 def run_gmail_process(email, password):
     global current_browser_context, gmail_status
     from playwright.sync_api import sync_playwright
 
-    kill_all_browsers() # Safety Wipe
+    force_unlock_browser_profile() # <--- VITAL FIX: UNLOCK PROFILE
     gmail_status["active"] = True
-    gmail_status["step"] = "Initializing Browser..."
+    gmail_status["step"] = "Initializing Secure Browser..."
 
     with sync_playwright() as p:
         try:
-            # STEALTH CONTEXT
+            # GMAIL SPECIFIC ARGS (Railway Compatible)
             context = p.chromium.launch_persistent_context(
                 USER_DATA_DIR,
                 headless=True,
-                channel="chrome", # Best for Google Login
+                channel="chrome", # Try accessing installed chrome
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800},
-                # Force English to find 'Sign in' button easily
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--lang=en-US", "--start-maximized"]
+                args=[
+                    "--disable-blink-features=AutomationControlled", 
+                    "--no-sandbox", 
+                    "--disable-dev-shm-usage", # Fix for Railway Memory
+                    "--lang=en-US", 
+                    "--start-maximized"
+                ]
             )
             current_browser_context = context
             page = context.new_page()
             
+            # Anti-Detection Script
             page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-            # --- STEP 1: OPEN GOOGLE.COM ---
+            # 1. Open Google Home
             gmail_status["step"] = "Opening Google.com..."
             page.goto("https://www.google.com/")
+            time.sleep(3)
             take_screenshot(page, "G1_Google_Home")
-            time.sleep(2)
 
-            # --- STEP 2: CLICK SIGN IN ---
+            # 2. Find 'Sign in' Button
             gmail_status["step"] = "Looking for Sign In Button..."
             
-            # Try finding the button (English or Link based)
-            found_button = False
-            # Selector 1: Text based
-            if page.is_visible("text=Sign in"):
-                page.click("text=Sign in")
-                found_button = True
-            # Selector 2: Link based (More reliable)
-            elif page.is_visible("a[href*='accounts.google.com']"):
-                page.click("a[href*='accounts.google.com']")
-                found_button = True
+            # Try multiple selectors for "Sign in"
+            found_btn = False
+            for sel in ["a[href*='accounts.google.com']", "text=Sign in", "text=Войти", "a.gb_ia"]:
+                if page.is_visible(sel):
+                    page.click(sel)
+                    found_btn = True
+                    break
             
-            if found_button:
+            if found_btn:
                 gmail_status["step"] = "Clicked Sign In..."
                 take_screenshot(page, "G2_Clicked_SignIn")
-                time.sleep(3)
+                time.sleep(5)
             else:
-                gmail_status["step"] = "Button not found. Trying direct link..."
+                gmail_status["step"] = "Button missing. Going direct..."
                 page.goto("https://accounts.google.com/")
+                time.sleep(3)
             
-            take_screenshot(page, "G3_Login_Page_Loaded")
+            take_screenshot(page, "G3_Login_Page")
 
-            # --- STEP 3: EMAIL ---
+            # 3. Email
             if page.is_visible('input[type="email"]'):
                 gmail_status["step"] = "Typing Email..."
                 page.fill('input[type="email"]', email)
-                take_screenshot(page, "G4_Email_Typed")
                 time.sleep(1)
-                
                 page.keyboard.press("Enter")
+                
                 gmail_status["step"] = "Email Sent. Waiting..."
                 time.sleep(5)
-                take_screenshot(page, "G5_After_Email")
+                take_screenshot(page, "G4_After_Email")
 
-            # --- STEP 4: PASSWORD ---
+            # 4. Password
             if page.is_visible('input[type="password"]'):
                 gmail_status["step"] = "Typing Password..."
                 page.fill('input[type="password"]', password)
-                take_screenshot(page, "G6_Password_Typed")
                 time.sleep(1)
-                
                 page.keyboard.press("Enter")
+                
                 gmail_status["step"] = "Password Sent. Waiting..."
                 time.sleep(5)
-                take_screenshot(page, "G7_After_Password")
+                take_screenshot(page, "G5_After_Password")
             
-            # --- STEP 5: WATCH MODE (DETAILED) ---
-            for i in range(120): # 6 Minutes
+            # 5. Live Watch Loop (6 Mins)
+            for i in range(120): 
                 if not gmail_status["active"]: break
                 
                 title = page.title()
                 gmail_status["step"] = f"Monitor: {title} ({120-i}s)"
-                
-                # Take fresh screenshot every 3 seconds
                 filename = take_screenshot(page, f"G_Live_{i}")
                 
-                # Check for success indicators
                 if "My Account" in title or "Inbox" in title or "Welcome" in title:
                     gmail_status["step"] = "🎉 LOGIN SUCCESSFUL!"
                     take_screenshot(page, "G_Success")
                     time.sleep(5)
                     break
                 
-                # Check for "Not Secure" Error
                 content = page.content()
                 if "browser or app may not be secure" in content:
-                    gmail_status["step"] = "❌ ERROR: Browser not secure detected."
+                    gmail_status["step"] = "❌ ERROR: Browser Not Secure"
                     take_screenshot(page, "G_Error_Secure")
                     break
 
@@ -379,6 +393,7 @@ def run_gmail_process(email, password):
 
         except Exception as e:
             gmail_status["step"] = f"Error: {str(e)}"
+            print(f"Gmail Error: {e}")
         
         finally:
             try: context.close()
@@ -398,12 +413,10 @@ def index(): return render_template('index.html')
 @app.route('/gmail')
 def gmail_page(): return render_template('gmail.html')
 
-# --- AVISO CONTROLS ---
 @app.route('/start', methods=['POST'])
 def start_bot():
     if bot_status["is_running"]: return jsonify({"status": "Already Running"})
     if gmail_status["active"]: return jsonify({"status": "Error: Stop Gmail First!"})
-    
     data = request.json
     t = threading.Thread(target=run_aviso_bot, args=(data.get('username'), data.get('password')))
     t.start()
@@ -414,15 +427,10 @@ def stop_bot():
     bot_status["is_running"] = False
     return jsonify({"status": "Stopping..."})
 
-@app.route('/status')
-def status(): return jsonify(bot_status)
-
-# --- GMAIL CONTROLS ---
 @app.route('/start_gmail', methods=['POST'])
 def start_gmail():
     if bot_status["is_running"]: return jsonify({"status": "Error: Stop Aviso Bot First!"})
     if gmail_status["active"]: return jsonify({"status": "Gmail process running"})
-
     data = request.json
     t = threading.Thread(target=run_gmail_process, args=(data.get('email'), data.get('password')))
     t.start()
@@ -436,7 +444,6 @@ def stop_gmail():
 @app.route('/gmail_status')
 def get_gmail_status(): return jsonify(gmail_status)
 
-# --- SHARED CONTROLS ---
 @app.route('/submit_code', methods=['POST'])
 def submit_code_api():
     data = request.json
@@ -449,7 +456,7 @@ def clear_data_route():
     try:
         bot_status["is_running"] = False
         gmail_status["active"] = False
-        kill_all_browsers()
+        force_unlock_browser_profile() # <--- KILL & WIPE
         if current_browser_context:
             try: current_browser_context.close()
             except: pass
@@ -462,6 +469,9 @@ def clear_data_route():
             return jsonify({"status": "Data Wiped Successfully"})
         else: return jsonify({"status": "No Data Found"})
     except Exception as e: return jsonify({"status": f"Error: {str(e)}"})
+
+@app.route('/status')
+def status(): return jsonify(bot_status)
 
 @app.route('/download_log')
 def download_log():
