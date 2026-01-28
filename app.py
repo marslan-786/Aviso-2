@@ -13,7 +13,7 @@ app = Flask(__name__)
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 USER_DATA_DIR = "/app/browser_data2"
-DEBUG_FILE = "debug_source.html" # یہ اب ایک بڑی ہسٹری فائل ہوگی
+DEBUG_FILE = "debug_source.html"
 
 # --- Shared State ---
 shared_data = {"otp_code": None}
@@ -35,48 +35,41 @@ def take_screenshot(page, name):
         bot_status["images"].append(filename)
     except: pass
 
-# --- CONTINUOUS LOGGING FUNCTION ---
+# --- CONTINUOUS LOGGING ---
 def save_debug_html(page, step_name):
-    """
-    یہ فنکشن اب پرانا ڈیٹا اڑائے گا نہیں، بلکہ اسی فائل میں نیا HTML جوڑ دے گا۔
-    ہر سٹیپ کے ساتھ ٹائم اور نام بھی لکھے گا۔
-    """
     try:
         content = page.content()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
         separator = f"""
-        \n\n
-        <div style="background:black;color:yellow;padding:20px;margin:20px;font-size:24px;border:5px solid red;">
-            ⚠️ STEP RECORDED: {step_name} <br> 🕒 TIME: {timestamp}
-        </div>
-        \n\n
-        """
-        
-        # Mode 'a' (Append) استعمال ہو رہا ہے تاکہ پچھلا ڈیٹا ضائع نہ ہو
+        \n\n<div style="background:#111;color:#0f0;padding:15px;margin:20px;border:3px solid #0f0;font-family:monospace;">
+            🖥️ DESKTOP ACTION: {step_name} <br> 🕒 TIME: {timestamp}
+        </div>\n\n"""
         with open(DEBUG_FILE, "a", encoding="utf-8") as f:
             f.write(separator + content)
-            
-        print(f"✅ Log appended: {step_name}")
-    except Exception as e:
-        print(f"Log Error: {e}")
+    except: pass
 
-# --- RESET LOG (On Start) ---
 def reset_debug_log():
     try:
         with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-            f.write("<h1>🤖 AVISO BOT LOG STARTED</h1>")
+            f.write("<h1>💻 AVISO DESKTOP BOT STARTED</h1>")
     except: pass
 
-# --- MOBILE STEALTH ---
-def apply_mobile_stealth(page):
+# --- DESKTOP STEALTH (Windows 11 Style) ---
+def apply_desktop_stealth(page):
     try:
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        # Fake Plugins to look like a real PC
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru', 'en-US', 'en']});
+        """)
+        
+        # Heavy Desktop Headers
         page.set_extra_http_headers({
-            "User-Agent": "Mozilla/5.0 (Linux; Android 14; 23124RN87G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.100 Mobile Safari/537.36",
-            "sec-ch-ua": '"Not A(Brand";v="99", "Android WebView";v="133", "Chromium";v="133"',
-            "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"Android"',
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+            "sec-ch-ua": '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
+            "sec-ch-ua-mobile": "?0", # Important: Not Mobile
+            "sec-ch-ua-platform": '"Windows"',
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
             "Upgrade-Insecure-Requests": "1"
         })
@@ -86,78 +79,80 @@ def apply_mobile_stealth(page):
 def get_best_task_via_js(page):
     return page.evaluate("""() => {
         const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
-        
         for (let table of tables) {
             if (table.offsetParent === null) continue;
             const rect = table.getBoundingClientRect();
             if (rect.height === 0 || rect.width === 0) continue; 
-            
             const style = window.getComputedStyle(table);
             if (style.display === 'none' || style.visibility === 'hidden') continue;
 
             const idPart = table.id.replace('ads-link-', '');
-            const isVideo = table.querySelector('.ybprosm') !== null;
-            if (!isVideo) continue;
+            if (!table.querySelector('.ybprosm')) continue;
 
             const timerInput = document.getElementById('ads_timer_' + idPart);
             const duration = timerInput ? parseInt(timerInput.value) : 20;
-            const priceEl = table.querySelector('span[title="Стоимость просмотра"], .price-text');
-            const price = priceEl ? parseFloat(priceEl.innerText) : 0;
-
+            
             return {
                 id: idPart,
-                price: price,
                 duration: duration,
                 tableId: table.id,
                 startSelector: '#link_ads_start_' + idPart,
-                confirmSelector: '#ads_btn_confirm_' + idPart,
-                errorSelector: '#btn_error_view_' + idPart
+                confirmSelector: '#ads_btn_confirm_' + idPart
             };
         }
         return null; 
     }""")
 
-# --- VISUAL TOUCH ---
-def perform_visual_touch(page, selector, screenshot_name):
+# --- MOUSE CLICK (Human Simulation) ---
+def perform_mouse_click(page, selector, screenshot_name):
     try:
+        if not page.is_visible(selector): return False
         box = page.locator(selector).bounding_box()
         if box:
-            center_x = box['x'] + box['width'] / 2
-            center_y = box['y'] + box['height'] / 2
+            # Calculate Center
+            x = box['x'] + box['width'] / 2 + random.uniform(-10, 10)
+            y = box['y'] + box['height'] / 2 + random.uniform(-5, 5)
             
-            safe_w = box['width'] * 0.3
-            safe_h = box['height'] * 0.3
+            print(f"Mouse moving to: {x:.0f}, {y:.0f}")
             
-            x = center_x + random.uniform(-safe_w, safe_w)
-            y = center_y + random.uniform(-safe_h, safe_h)
-            
-            print(f"Aiming: {x:.1f}, {y:.1f}")
-
+            # 1. VISUAL RED DOT (Cursor Indicator)
             page.evaluate(f"""() => {{
                 const d = document.createElement('div');
-                d.id = 'aim-dot';
+                d.id = 'mouse-dot';
                 d.style.position = 'fixed'; 
-                d.style.left = '{x-6}px'; d.style.top = '{y-6}px';
+                d.style.left = '{x}px'; d.style.top = '{y}px';
                 d.style.width = '12px'; d.style.height = '12px';
-                d.style.background = 'red'; d.style.border = '2px solid yellow';
-                d.style.borderRadius = '50%'; d.style.zIndex = '2147483647';
+                d.style.background = 'transparent';
+                d.style.border = '2px solid red';
+                d.style.borderRadius = '50%';
+                d.style.zIndex = '9999999';
                 d.style.pointerEvents = 'none';
                 document.body.appendChild(d);
             }}""")
-
-            time.sleep(0.5) 
+            
+            # 2. REAL MOUSE MOVEMENT (Hover effect)
+            page.mouse.move(x, y, steps=10) # Smooth move
+            time.sleep(0.3)
+            
             take_screenshot(page, screenshot_name)
-            page.touchscreen.tap(x, y)
-            page.evaluate("if(document.getElementById('aim-dot')) document.getElementById('aim-dot').remove();")
+            
+            # 3. CLICK
+            page.mouse.click(x, y)
+            
+            # Cleanup
+            page.evaluate("if(document.getElementById('mouse-dot')) document.getElementById('mouse-dot').remove();")
             return True
-    except: pass
+    except Exception as e: print(f"Mouse Error: {e}")
     return False
 
-# --- AUTO PLAY ---
+# --- AUTO PLAY (Desktop) ---
 def ensure_video_playing(page):
     try:
+        # On Desktop, spacebar often toggles play
+        page.keyboard.press("Space")
+        # Or click the big button
         page.evaluate("""() => {
-            const btn = document.querySelector('.ytp-large-play-button') || document.querySelector('button[aria-label="Play"]');
+            const btn = document.querySelector('.ytp-large-play-button');
             if(btn) btn.click();
         }""")
     except: pass
@@ -171,90 +166,79 @@ def process_youtube_tasks(context, page):
     if page.is_visible("input[name='username']"): return
 
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
-    
-    # LOG: Task List Open
-    save_debug_html(page, "1_Task_List_Opened")
+    save_debug_html(page, "Task_List_Page")
     take_screenshot(page, "0_Task_List")
 
     for i in range(1, 31): 
         if not bot_status["is_running"]: break
         
-        bot_status["step"] = f"Scanning Task #{i}..."
+        bot_status["step"] = f"Task #{i} Scan..."
         task_data = get_best_task_via_js(page)
         
         if not task_data:
-            print("No visible tasks.")
-            save_debug_html(page, f"No_Tasks_Found_Step_{i}")
+            print("No tasks found.")
+            save_debug_html(page, "No_Tasks")
             bot_status["step"] = "No Tasks Visible."
             break
             
         print(f"Task: {task_data['id']} ({task_data['duration']}s)")
-        bot_status["step"] = f"Task #{i}: {task_data['duration']}s"
-
+        
         try:
-            page.evaluate(f"document.getElementById('{task_data['tableId']}').style.border = '3px solid red';")
-            page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{block: 'center'}});")
+            # Scroll nicely like a user
+            page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{behavior: 'smooth', block: 'center'}});")
             time.sleep(1)
-            take_screenshot(page, f"Task_{i}_1_Target")
-            
-            # LOG: Before Click
-            save_debug_html(page, f"Task_{i}_Before_Click")
+            take_screenshot(page, f"Task_{i}_Target")
 
+            # --- MOUSE CLICK START ---
             initial_pages = len(context.pages)
-            if not perform_visual_touch(page, task_data['startSelector'], f"Task_{i}_2_Aim_Start"):
+            if not perform_mouse_click(page, task_data['startSelector'], f"Task_{i}_Click_Start"):
                 page.reload()
                 continue
             
             time.sleep(5)
-
             if len(context.pages) == initial_pages:
-                print("Click missed. JS Backup...")
+                # Retry with JS if mouse fails
                 page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
                 time.sleep(5)
                 if len(context.pages) == initial_pages:
-                    print("Dead link. Refreshing.")
                     page.reload()
                     continue
 
             new_page = context.pages[-1]
-            apply_mobile_stealth(new_page) 
+            apply_desktop_stealth(new_page) 
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # LOG: Video Page Opened
-            save_debug_html(new_page, f"Task_{i}_Video_Page_Opened")
-
-            try: new_page.mouse.move(100, 100); new_page.mouse.move(200, 200)
+            # Mouse Jiggle (Anti-Idle)
+            try: new_page.mouse.move(500, 500); new_page.mouse.move(600, 400)
             except: pass
 
             time.sleep(2)
             try:
+                # Desktop VPN warning might be different, but keeping check
                 if new_page.is_visible("button:has-text('Я ознакомлен')"):
-                    perform_visual_touch(new_page, "button:has-text('Я ознакомлен')", f"Task_{i}_VPN_Click")
-                    time.sleep(2)
+                    perform_mouse_click(new_page, "button:has-text('Я ознакомлен')", f"Task_{i}_VPN")
             except: pass
 
             ensure_video_playing(new_page)
-            take_screenshot(new_page, f"Task_{i}_3_Video_Open")
+            take_screenshot(new_page, f"Task_{i}_Video")
             
-            wait_time = task_data['duration'] + random.randint(6, 12)
+            wait_time = task_data['duration'] + random.randint(5, 10)
             for sec in range(wait_time):
                 if not bot_status["is_running"]: 
                     new_page.close()
                     return
                 if sec % 5 == 0: 
                     bot_status["step"] = f"Watching... {sec}/{wait_time}s"
-                    try: new_page.mouse.move(random.randint(100,300), random.randint(100,300))
+                    # Small mouse movements
+                    try: new_page.mouse.move(random.randint(200,800), random.randint(200,600))
                     except: pass
                 time.sleep(1)
 
             new_page.close()
             page.bring_to_front()
             time.sleep(1)
-            
-            # LOG: Back on Main Page
-            save_debug_html(page, f"Task_{i}_Back_On_Main_Before_Confirm")
-            take_screenshot(page, f"Task_{i}_4_Back_Main")
+            take_screenshot(page, f"Task_{i}_Back")
 
             confirm_selector = task_data['confirmSelector']
             bot_status["step"] = "Confirming..."
@@ -267,22 +251,18 @@ def process_youtube_tasks(context, page):
                 time.sleep(1)
             
             if btn_visible:
-                perform_visual_touch(page, confirm_selector, f"Task_{i}_5_Aim_Confirm")
+                perform_mouse_click(page, confirm_selector, f"Task_{i}_Click_Confirm")
                 time.sleep(5)
-                take_screenshot(page, f"Task_{i}_6_Success")
+                take_screenshot(page, f"Task_{i}_Success")
                 bot_status["step"] = f"Task #{i} Done!"
-                # LOG: Success
-                save_debug_html(page, f"Task_{i}_Success_After_Confirm")
+                save_debug_html(page, f"Task_{i}_Success")
             else:
-                print("Confirm missing.")
-                save_debug_html(page, f"Task_{i}_Confirm_Missing_Error")
-                bot_status["step"] = "Confirm Missing. Refreshing..."
                 page.reload()
                 time.sleep(3)
                 break
 
         except Exception as e:
-            print(f"Task error: {e}")
+            print(f"Error: {e}")
             try: context.pages[-1].close() if len(context.pages) > 1 else None
             except: pass
             page.reload()
@@ -290,7 +270,6 @@ def process_youtube_tasks(context, page):
             break
 
     if bot_status["is_running"]:
-        print("Cycle finished. Logging out.")
         page.goto("https://aviso.bz/logout")
 
 # --- MAIN RUNNER ---
@@ -298,9 +277,7 @@ def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
 
-    # *** RESET LOG FILE ON START ***
     reset_debug_log()
-
     bot_status["is_running"] = True
     bot_status["needs_code"] = False
     shared_data["otp_code"] = None
@@ -308,83 +285,65 @@ def run_infinite_loop(username, password):
     with sync_playwright() as p:
         while bot_status["is_running"]:
             try:
+                # --- DESKTOP CONFIGURATION ---
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
-                    user_agent="Mozilla/5.0 (Linux; Android 14; 23124RN87G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.100 Mobile Safari/537.36",
-                    viewport={"width": 412, "height": 915},
-                    device_scale_factor=2.625,
-                    is_mobile=True,
-                    has_touch=True,
+                    # Windows 10 User Agent
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080}, # FULL HD
+                    device_scale_factor=1,
+                    is_mobile=False, # IMPORTANT: PC Mode
+                    has_touch=False, # IMPORTANT: Mouse Mode
                     args=[
-                        "--lang=en-US", 
-                        "--no-sandbox", 
                         "--disable-blink-features=AutomationControlled",
                         "--disable-background-timer-throttling",
-                        "--disable-backgrounding-occluded-windows",
                         "--disable-renderer-backgrounding",
-                        "--disable-dev-shm-usage"
+                        "--start-maximized", # Full Window
+                        "--lang=ru-RU,ru"
                     ]
                 )
                 current_browser_context = context
                 
                 page = context.new_page()
-                apply_mobile_stealth(page)
+                apply_desktop_stealth(page)
                 
-                bot_status["step"] = "Opening Login Page..."
+                bot_status["step"] = "Opening Login (PC)..."
                 page.goto("https://aviso.bz/login", timeout=60000)
-                page.wait_for_load_state("networkidle")
-                
-                # LOG: Login Page Loaded
-                save_debug_html(page, "Login_Page_Initial_Load")
+                save_debug_html(page, "PC_Login_Page")
                 
                 if page.is_visible("input[name='username']"):
+                    # Type credentials
                     page.click("input[name='username']")
-                    page.type("input[name='username']", username, delay=120)
+                    page.type("input[name='username']", username, delay=100)
                     time.sleep(0.5)
                     page.click("input[name='password']")
-                    page.type("input[name='password']", password, delay=120)
+                    page.type("input[name='password']", password, delay=100)
                     time.sleep(1)
-
-                    # LOG: Filled Credentials
-                    save_debug_html(page, "Login_Credentials_Filled")
 
                     bot_status["step"] = "Pressing Enter..."
                     page.press("input[name='password']", "Enter")
                     
                     time.sleep(5)
-                    take_screenshot(page, "Login_Check_5s")
-                    
-                    # LOG: After Enter Press
-                    save_debug_html(page, "Login_After_Enter_Press")
-                    
+                    take_screenshot(page, "Login_Attempt")
+                    save_debug_html(page, "After_Login_Enter")
+
+                    # Check for loading
                     try:
-                        btn_text = page.locator("button[type='submit']").inner_text().lower()
-                        if "подождите" in btn_text:
-                            bot_status["step"] = "Stuck on Loading. Retrying in 10s..."
-                            time.sleep(10)
-                            
-                            btn_text_again = page.locator("button[type='submit']").inner_text().lower()
-                            if "подождите" in btn_text_again:
-                                print("Login Frozen. Refreshing Page...")
-                                bot_status["step"] = "Frozen. Refreshing..."
-                                page.reload()
-                                time.sleep(5)
-                                context.close()
-                                continue 
+                        if "подождите" in page.content().lower():
+                            bot_status["step"] = "Loading... (Wait 5s)"
+                            time.sleep(5)
                     except: pass
 
+                    # OTP Logic
                     if page.is_visible("input[name='code']"):
                         bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
                         take_screenshot(page, "Code_Required")
-                        save_debug_html(page, "OTP_Code_Page")
                         
-                        count = 0
                         while shared_data["otp_code"] is None:
                             time.sleep(1)
-                            count += 1
-                            if count > 300 or not bot_status["is_running"]: break
+                            if not bot_status["is_running"]: break
                         
                         if shared_data["otp_code"]:
                             page.fill("input[name='code']", shared_data["otp_code"])
@@ -393,22 +352,26 @@ def run_infinite_loop(username, password):
                             bot_status["needs_code"] = False
                             shared_data["otp_code"] = None
 
+                    # If still on login, click button
                     if page.is_visible("input[name='username']") and not page.is_visible("input[name='code']"):
-                         print("Login failed completely.")
-                         bot_status["step"] = "Login Failed. Restarting..."
-                         save_debug_html(page, "Login_Final_Fail_State")
-                         take_screenshot(page, "Login_Failed_Final")
-                         time.sleep(3)
-                         context.close()
-                         continue
+                         print("Clicking Button...")
+                         btn = page.locator("button:has-text('Войти')")
+                         if btn.count() > 0:
+                             perform_mouse_click(page, "button:has-text('Войти')", "Login_Click")
+                         else:
+                             page.locator("button[type='submit']").click()
+                         
+                         time.sleep(5)
+                         if page.is_visible("input[name='username']"):
+                             print("Login failed.")
+                             context.close()
+                             continue
                 
                 bot_status["step"] = "Login Success!"
                 take_screenshot(page, "Login_Success")
-                save_debug_html(page, "Login_Successful_Dashboard")
                 process_youtube_tasks(context, page)
                 
                 context.close()
-                
                 print("Waiting 1 hour...")
                 for s in range(3600):
                     if not bot_status["is_running"]: return
