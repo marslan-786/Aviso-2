@@ -35,14 +35,13 @@ def take_screenshot(page, name):
         bot_status["images"].append(filename)
     except: pass
 
-# --- CONTINUOUS LOGGING (New Feature Kept) ---
 def save_debug_html(page, step_name):
     try:
         content = page.content()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         separator = f"""
         \n\n<div style="background:#111;color:#0f0;padding:15px;margin:20px;border:3px solid #0f0;font-family:monospace;">
-            🖥️ ACTION: {step_name} <br> 🕒 TIME: {timestamp}
+            🖱️ MOUSE ACTION: {step_name} <br> 🕒 TIME: {timestamp}
         </div>\n\n"""
         with open(DEBUG_FILE, "a", encoding="utf-8") as f:
             f.write(separator + content)
@@ -51,7 +50,7 @@ def save_debug_html(page, step_name):
 def reset_debug_log():
     try:
         with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-            f.write("<h1>🤖 AVISO BOT LOG (OLD CONFIG)</h1>")
+            f.write("<h1>🖱️ AVISO HUMAN MOUSE BOT</h1>")
     except: pass
 
 # --- JS SCANNER ---
@@ -62,6 +61,7 @@ def get_best_task_via_js(page):
             if (table.offsetParent === null) continue;
             const rect = table.getBoundingClientRect();
             if (rect.height === 0 || rect.width === 0) continue; 
+            
             const style = window.getComputedStyle(table);
             if (style.display === 'none' || style.visibility === 'hidden') continue;
 
@@ -82,6 +82,67 @@ def get_best_task_via_js(page):
         return null; 
     }""")
 
+# --- HUMAN MOUSE SIMULATION (The Fix) ---
+def perform_human_mouse_click(page, selector, screenshot_name):
+    """
+    یہ فنکشن اصلی انسان کی طرح ماؤس ہلائے گا اور ریڈ ڈاٹ دکھائے گا۔
+    """
+    try:
+        if not page.is_visible(selector): return False
+        
+        # 1. Get Coordinates
+        box = page.locator(selector).bounding_box()
+        if box:
+            # Random Point inside the element (Not perfect center)
+            x = box['x'] + box['width'] / 2 + random.uniform(-15, 15)
+            y = box['y'] + box['height'] / 2 + random.uniform(-5, 5)
+            
+            print(f"Moving Mouse to: {x:.0f}, {y:.0f}")
+            
+            # 2. MOVE MOUSE (Slowly, with steps)
+            # steps=10 کا مطلب ہے کہ وہ 10 حصوں میں وہاں پہنچے گا (جھٹکا نہیں لگے گا)
+            page.mouse.move(x, y, steps=15) 
+            time.sleep(0.3) # Hover Effect (تھوڑا رکا)
+
+            # 3. DRAW RED DOT (Visual Feedback)
+            page.evaluate(f"""() => {{
+                const d = document.createElement('div');
+                d.id = 'click-dot';
+                d.style.position = 'fixed'; 
+                d.style.left = '{x-5}px'; d.style.top = '{y-5}px';
+                d.style.width = '10px'; d.style.height = '10px';
+                d.style.background = 'red'; 
+                d.style.border = '2px solid white';
+                d.style.borderRadius = '50%';
+                d.style.zIndex = '9999999';
+                d.style.pointerEvents = 'none';
+                document.body.appendChild(d);
+            }}""")
+            
+            take_screenshot(page, screenshot_name)
+            
+            # 4. CLICK
+            page.mouse.down()
+            time.sleep(random.uniform(0.05, 0.15)) # Click duration
+            page.mouse.up()
+            
+            # 5. Remove Dot
+            time.sleep(0.5)
+            page.evaluate("if(document.getElementById('click-dot')) document.getElementById('click-dot').remove();")
+            return True
+    except Exception as e:
+        print(f"Mouse Error: {e}")
+    return False
+
+# --- AUTO PLAY ---
+def ensure_video_playing(page):
+    try:
+        # Spacebar is safer for desktop
+        page.keyboard.press("Space")
+        # Backup Click
+        page.evaluate("document.querySelector('.ytp-large-play-button')?.click()")
+    except: pass
+
 # --- PROCESS TASKS ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking Tasks..."
@@ -97,7 +158,7 @@ def process_youtube_tasks(context, page):
     for i in range(1, 31): 
         if not bot_status["is_running"]: break
         
-        bot_status["step"] = f"Task #{i} Scan..."
+        bot_status["step"] = f"Scanning Task #{i}..."
         task_data = get_best_task_via_js(page)
         
         if not task_data:
@@ -109,19 +170,22 @@ def process_youtube_tasks(context, page):
         print(f"Task: {task_data['id']} ({task_data['duration']}s)")
         
         try:
+            # Scroll nicely
             page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{behavior: 'smooth', block: 'center'}});")
             time.sleep(1)
             take_screenshot(page, f"Task_{i}_Target")
 
-            # START
+            # --- HUMAN CLICK START ---
             initial_pages = len(context.pages)
-            
-            # Simple Click (Like Old Bot)
-            page.click(task_data['startSelector'])
+            if not perform_human_mouse_click(page, task_data['startSelector'], f"Task_{i}_Start_Click"):
+                page.reload()
+                continue
             
             time.sleep(5)
+            
+            # JS Fallback ONLY if mouse failed completely
             if len(context.pages) == initial_pages:
-                # Retry
+                print("Mouse click missed. Trying JS Force...")
                 page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
                 time.sleep(5)
                 if len(context.pages) == initial_pages:
@@ -132,43 +196,58 @@ def process_youtube_tasks(context, page):
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            # Simple Play Check
+            # --- ANTI-IDLE MOUSE JIGGLE ---
+            try: new_page.mouse.move(500, 500, steps=5)
+            except: pass
+
             time.sleep(2)
+            # Check VPN Button
             try:
                 if new_page.is_visible("button:has-text('Я ознакомлен')"):
-                    new_page.click("button:has-text('Я ознакомлен')")
+                    perform_human_mouse_click(new_page, "button:has-text('Я ознакомлен')", f"Task_{i}_VPN")
             except: pass
 
-            try:
-                new_page.keyboard.press("Space")
-            except: pass
-
-            take_screenshot(new_page, f"Task_{i}_Video")
+            ensure_video_playing(new_page)
+            take_screenshot(new_page, f"Task_{i}_Video_Playing")
             
-            wait_time = task_data['duration'] + random.randint(5, 10)
+            wait_time = task_data['duration'] + random.randint(6, 12)
             for sec in range(wait_time):
                 if not bot_status["is_running"]: 
                     new_page.close()
                     return
                 if sec % 5 == 0: 
                     bot_status["step"] = f"Watching... {sec}/{wait_time}s"
+                    # Random small movements to show "life"
+                    try: new_page.mouse.move(random.randint(100, 800), random.randint(100, 600), steps=5)
+                    except: pass
                 time.sleep(1)
 
             new_page.close()
             page.bring_to_front()
             time.sleep(1)
-            take_screenshot(page, f"Task_{i}_Back")
+            
+            # --- BACK ON MAIN PAGE ---
+            take_screenshot(page, f"Task_{i}_Back_Main")
 
             confirm_selector = task_data['confirmSelector']
             bot_status["step"] = "Confirming..."
             
-            if page.is_visible(confirm_selector):
-                page.click(confirm_selector)
+            btn_visible = False
+            for _ in range(8):
+                if page.is_visible(confirm_selector):
+                    btn_visible = True
+                    break
+                time.sleep(1)
+            
+            if btn_visible:
+                # HUMAN CLICK CONFIRM
+                perform_human_mouse_click(page, confirm_selector, f"Task_{i}_Confirm_Click")
                 time.sleep(5)
                 take_screenshot(page, f"Task_{i}_Success")
                 bot_status["step"] = f"Task #{i} Done!"
                 save_debug_html(page, f"Task_{i}_Success")
             else:
+                print("Confirm button missing.")
                 page.reload()
                 time.sleep(3)
                 break
@@ -184,7 +263,7 @@ def process_youtube_tasks(context, page):
     if bot_status["is_running"]:
         page.goto("https://aviso.bz/logout")
 
-# --- MAIN RUNNER (EXACT OLD CONFIG) ---
+# --- MAIN RUNNER ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
@@ -197,69 +276,84 @@ def run_infinite_loop(username, password):
     with sync_playwright() as p:
         while bot_status["is_running"]:
             try:
-                # --- EXACT OLD CONFIGURATION ---
-                # ہم نے وہ تمام فالتو ہیڈرز ہٹا دیے ہیں جو نئی فائل میں تھے
+                # --- DESKTOP MODE ---
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
-                    # یہی سیٹنگز پرانی فائل میں تھیں 👇
+                    # Windows 10 User Agent (Standard)
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={"width": 1366, "height": 768}, # Standard Laptop
+                    device_scale_factor=1,
+                    is_mobile=False,
+                    has_touch=False,
                     args=[
-                        "--lang=en-US",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-background-timer-throttling",
                         "--start-maximized"
-                    ],
-                    viewport={"width": 1280, "height": 800} 
+                    ]
                 )
                 current_browser_context = context
                 
                 page = context.new_page()
-                # NO APPLY_STEALTH CALL HERE (Old code didn't have it)
+                # No extra stealth needed for this mode
                 
-                bot_status["step"] = "Opening Site..."
+                bot_status["step"] = "Login Page..."
                 page.goto("https://aviso.bz/login", timeout=60000)
-                page.wait_for_load_state("networkidle")
                 save_debug_html(page, "Login_Page")
                 
                 if page.is_visible("input[name='username']"):
-                    # --- EXACT OLD LOGIN LOGIC ---
-                    print("Not logged in. Logging in...")
-                    bot_status["step"] = "Filling Form..."
+                    # Fill Form
+                    page.click("input[name='username']")
+                    page.type("input[name='username']", username, delay=80) # Typing speed
+                    time.sleep(0.5)
+                    page.click("input[name='password']")
+                    page.type("input[name='password']", password, delay=80)
+                    time.sleep(1)
+
+                    bot_status["step"] = "Clicking Login..."
+                    take_screenshot(page, "Before_Login_Click")
                     
-                    page.fill("input[name='username']", username)
-                    page.fill("input[name='password']", password)
-                    take_screenshot(page, "Credentials_Filled")
+                    # Human Click on Login Button
+                    # Try finding Russian button first, then generic
+                    btn_selector = "button:has-text('Войти')"
+                    if not page.is_visible(btn_selector):
+                        btn_selector = "button[type='submit']"
                     
-                    bot_status["step"] = "Pressing Enter..."
-                    # پرانی فائل میں صرف انٹر پریس ہو رہا تھا
-                    page.locator("input[name='password']").press("Enter")
+                    perform_human_mouse_click(page, btn_selector, "Login_Mouse_Click")
                     
                     time.sleep(5)
-                    take_screenshot(page, "Login_Result")
-                    save_debug_html(page, "Login_Result")
+                    take_screenshot(page, "After_Login_Click")
 
-                    # OTP Check (From Old File)
+                    # Force Submit if stuck
+                    if page.is_visible("input[name='username']"):
+                        # Check loading
+                        if "подождите" not in page.content().lower():
+                            print("Button didn't work. Trying Force Submit...")
+                            bot_status["step"] = "Force Submitting..."
+                            page.evaluate("document.querySelector('form[action*=\"login\"]').submit()")
+                            time.sleep(8)
+
+                    # OTP Logic
                     if page.is_visible("input[name='code']"):
                         bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
-                        take_screenshot(page, "Code_Required")
+                        take_screenshot(page, "OTP_Needed")
                         
                         while shared_data["otp_code"] is None:
-                            time.sleep(2)
+                            time.sleep(1)
                             if not bot_status["is_running"]: break
                         
                         if shared_data["otp_code"]:
                             page.fill("input[name='code']", shared_data["otp_code"])
-                            page.locator("input[name='code']").press("Enter")
-                            time.sleep(5)
+                            page.press("input[name='code']", "Enter")
+                            time.sleep(8)
                             bot_status["needs_code"] = False
                             shared_data["otp_code"] = None
 
-                    # Verification
                     if page.is_visible("input[name='username']"):
                         print("Login failed.")
                         bot_status["step"] = "Login Failed. Retrying..."
+                        save_debug_html(page, "Login_Failed")
                         context.close()
                         continue
                 
