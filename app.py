@@ -242,7 +242,7 @@ def process_youtube_tasks(context, page):
         print("Cycle finished. Logging out.")
         page.goto("https://aviso.bz/logout")
 
-# --- MAIN RUNNER (With Patience) ---
+# --- MAIN RUNNER (5s Wait + OTP Priority) ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
@@ -290,40 +290,21 @@ def run_infinite_loop(username, password):
                     page.type("input[name='password']", password, delay=120)
                     time.sleep(1)
 
-                    # --- PATIENT LOGIN ---
-                    bot_status["step"] = "Pressing Enter & Waiting..."
+                    # --- ENTER & 5s WAIT ---
+                    bot_status["step"] = "Pressing Enter..."
                     print("Pressing ENTER...")
                     page.press("input[name='password']", "Enter")
                     
-                    # 1. WAIT 10 SECONDS (No Activity)
-                    take_screenshot(page, "Login_Processing")
-                    time.sleep(10)
-
-                    # 2. Check for "Loading..." state
-                    try:
-                        # Check if button changed to "Wait" (подождите)
-                        btn_text = page.locator("button[type='submit']").inner_text().lower()
-                        if "подождите" in btn_text:
-                             bot_status["step"] = "Still Loading... Waiting..."
-                             print("System busy, waiting 5s more...")
-                             time.sleep(5)
-                    except: pass
-
-                    # 3. IF STILL ON LOGIN PAGE -> CLICK BUTTON
-                    if page.is_visible("input[name='password']"):
-                         print("Enter failed/timeout. Trying Button Click...")
-                         bot_status["step"] = "Clicking Button 'Войти'..."
-                         
-                         btn = page.locator("button:has-text('Войти')")
-                         if btn.count() > 0:
-                             perform_visual_touch(page, "button:has-text('Войти')", "Login_Btn_Retry")
-                         else:
-                             page.locator("button[type='submit']").click()
-                         
-                         time.sleep(8) # Wait again
-
-                    # 2FA Logic
+                    # 1. 5 Seconds Wait (As requested)
+                    bot_status["step"] = "Waiting 5s for response..."
+                    time.sleep(5)
+                    
+                    # 2. IMMEDIATE SCREENSHOT
+                    take_screenshot(page, "Login_Result_5s")
+                    
+                    # 3. OTP CHECK (High Priority)
                     if page.is_visible("input[name='code']"):
+                        print("OTP/Code Detected!")
                         bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
                         take_screenshot(page, "Code_Required")
@@ -341,13 +322,34 @@ def run_infinite_loop(username, password):
                             bot_status["needs_code"] = False
                             shared_data["otp_code"] = None
 
-                    # Verify Login
-                    if page.is_visible("input[name='username']"):
-                        print("Login failed completely.")
-                        bot_status["step"] = "Login Failed. Restarting..."
-                        time.sleep(5)
-                        context.close()
-                        continue
+                    # 4. Check if Still on Login Page
+                    elif page.is_visible("input[name='username']"):
+                         # Check for loading msg
+                         try:
+                             btn_text = page.locator("button[type='submit']").inner_text().lower()
+                             if "подождите" in btn_text:
+                                 bot_status["step"] = "Still Loading... (Wait 5s)"
+                                 time.sleep(5)
+                             else:
+                                 # If not loading and still here -> Click Button
+                                 print("Enter didn't work. Clicking button...")
+                                 bot_status["step"] = "Clicking 'Войти'..."
+                                 btn = page.locator("button:has-text('Войти')")
+                                 if btn.count() > 0:
+                                     perform_visual_touch(page, "button:has-text('Войти')", "Login_Btn_Retry")
+                                 else:
+                                     page.locator("button[type='submit']").click()
+                                 time.sleep(5)
+                         except: pass
+
+                    # Verify Login Success
+                    if page.is_visible("input[name='username']") and not page.is_visible("input[name='code']"):
+                         print("Login failed completely.")
+                         bot_status["step"] = "Login Failed. Restarting..."
+                         take_screenshot(page, "Login_Failed_Final")
+                         time.sleep(3)
+                         context.close()
+                         continue
                 
                 bot_status["step"] = "Login Success!"
                 take_screenshot(page, "Login_Success")
