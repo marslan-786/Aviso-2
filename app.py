@@ -13,7 +13,7 @@ app = Flask(__name__)
 # --- Configuration ---
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-USER_DATA_DIR = "/app/browser_data"
+USER_DATA_DIR = "/app/browser_data2"
 DEBUG_FILE = "debug_source.html"
 PROXY_FILE = "proxy_config.txt"
 
