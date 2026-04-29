@@ -13,9 +13,10 @@ app = Flask(__name__)
 # --- Configuration ---
 SCREENSHOT_DIR = "static/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-USER_DATA_DIR = "/app/browser_data2"
+USER_DATA_DIR = "/app/browser_data"
 DEBUG_FILE = "debug_source.html"
 PROXY_FILE = "proxy_config.txt"
+COOKIES_FILE = "youtube_cookies.json"  # <-- YouTube Cookies File
 
 # --- Shared State ---
 shared_data = {"otp_code": None}
@@ -75,6 +76,19 @@ def reset_debug_log():
         with open(DEBUG_FILE, "w", encoding="utf-8") as f:
             f.write("<h1>🖱️ AVISO BOT LOGS</h1>")
     except: pass
+
+def inject_youtube_cookies(context):
+    """Injects YouTube cookies from a JSON file into the browser context."""
+    if os.path.exists(COOKIES_FILE):
+        try:
+            with open(COOKIES_FILE, "r", encoding="utf-8") as f:
+                cookies = json.load(f)
+                context.add_cookies(cookies)
+            print("🍪 YouTube Cookies Injected Successfully!")
+        except Exception as e:
+            print(f"⚠️ Error loading cookies: {e}")
+    else:
+        print("⚠️ youtube_cookies.json file not found. Running without injected cookies.")
 
 # --- JS SCANNERS ---
 def get_best_task_via_js(page):
@@ -371,6 +385,10 @@ def run_infinite_loop(username, password):
                     is_mobile=False, has_touch=False, proxy=proxy_config,
                     args=["--disable-blink-features=AutomationControlled", "--disable-background-timer-throttling", "--start-maximized"]
                 )
+                
+                # ---> Inject YouTube Cookies Here <---
+                inject_youtube_cookies(context)
+                
                 current_browser_context = context
                 page = context.new_page()
                 
