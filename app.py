@@ -185,12 +185,29 @@ def ensure_video_playing(page):
     except: pass
 
 # --- PROCESS YOUTUBE TASKS ---
+
+# --- PROCESS YOUTUBE TASKS ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking YouTube Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
+    # پاپ اپ کو لوڈ ہونے کا تھوڑا سا ٹائم دیتے ہیں
+    time.sleep(2) 
+    
     if page.is_visible("input[name='username']"): return
+
+    # ---> NEW: POPUP HANDLER (Я ознакомлен) <---
+    try:
+        popup_selector = "button:has-text('Я ознакомлен')"
+        if page.is_visible(popup_selector):
+            print("🚨 Info popup detected! Clicking 'Я ознакомлен'...")
+            bot_status["step"] = "Closing Notice Popup..."
+            perform_human_mouse_click(page, popup_selector, "Popup_Closed")
+            time.sleep(2) # بند ہونے کے بعد تھوڑا انتظار
+    except Exception as e:
+        pass
+    # ---------------------------------------------
 
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
     save_debug_html(page, "Tasks_Loaded")
@@ -232,6 +249,7 @@ def process_youtube_tasks(context, page):
             except: pass
 
             time.sleep(2)
+            # اگر نئی ٹیب میں بھی کوئی ایسا پاپ اپ آئے تو اس کو بھی کلوز کرے گا (یہ تمہاری پرانی سکرپٹ میں بھی تھا)
             try:
                 if new_page.is_visible("button:has-text('Я ознакомлен')"):
                     perform_human_mouse_click(new_page, "button:has-text('Я ознакомлен')", f"YT_{i}_VPN")
