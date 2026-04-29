@@ -185,29 +185,26 @@ def ensure_video_playing(page):
     except: pass
 
 # --- PROCESS YOUTUBE TASKS ---
-
 # --- PROCESS YOUTUBE TASKS ---
 def process_youtube_tasks(context, page):
     bot_status["step"] = "Checking YouTube Tasks..."
     page.goto("https://aviso.bz/tasks-youtube")
     page.wait_for_load_state("networkidle")
     
-    # پاپ اپ کو لوڈ ہونے کا تھوڑا سا ٹائم دیتے ہیں
     time.sleep(2) 
     
     if page.is_visible("input[name='username']"): return
 
-    # ---> NEW: POPUP HANDLER (Я ознакомлен) <---
+    # ---> MAIN PAGE POPUP HANDLER <---
     try:
-        popup_selector = "button:has-text('Я ознакомлен')"
+        popup_selector = "text='Я ознакомлен'"
         if page.is_visible(popup_selector):
             print("🚨 Info popup detected! Clicking 'Я ознакомлен'...")
             bot_status["step"] = "Closing Notice Popup..."
             perform_human_mouse_click(page, popup_selector, "Popup_Closed")
-            time.sleep(2) # بند ہونے کے بعد تھوڑا انتظار
+            time.sleep(2) 
     except Exception as e:
         pass
-    # ---------------------------------------------
 
     page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
     save_debug_html(page, "Tasks_Loaded")
@@ -245,15 +242,30 @@ def process_youtube_tasks(context, page):
             new_page.wait_for_load_state("domcontentloaded")
             new_page.bring_to_front()
             
-            try: new_page.mouse.move(500, 500, steps=5)
-            except: pass
-
-            time.sleep(2)
-            # اگر نئی ٹیب میں بھی کوئی ایسا پاپ اپ آئے تو اس کو بھی کلوز کرے گا (یہ تمہاری پرانی سکرپٹ میں بھی تھا)
+            bot_status["step"] = f"YT Task #{i}: Loading Video/VPN Page..."
+            time.sleep(4) # تھوڑا ٹائم دیا تاکہ وی پی این والا پیج صحیح سے لوڈ ہو جائے
+            
+            # ---> NEW: VPN WARNING HANDLER FOR NEW TAB <---
             try:
-                if new_page.is_visible("button:has-text('Я ознакомлен')"):
-                    perform_human_mouse_click(new_page, "button:has-text('Я ознакомлен')", f"YT_{i}_VPN")
-            except: pass
+                vpn_btn_selector = "text='Я ознакомлен'"
+                # چیک کرتے ہیں کہ کیا 5 سیکنڈ کے اندر یہ بٹن شو ہوتا ہے
+                btn_visible = False
+                for _ in range(5):
+                    if new_page.is_visible(vpn_btn_selector):
+                        btn_visible = True
+                        break
+                    time.sleep(1)
+
+                if btn_visible:
+                    print(f"🚨 VPN Warning detected on YT Task #{i}! Clicking to proceed...")
+                    bot_status["step"] = "Bypassing VPN Warning..."
+                    clicked = perform_human_mouse_click(new_page, vpn_btn_selector, f"YT_{i}_VPN_Bypass")
+                    if not clicked:
+                        new_page.click(vpn_btn_selector) # اگر ماؤس کلک فیل ہو تو ڈائریکٹ کلک کر دے
+                    time.sleep(4) # کلک کرنے کے بعد اصلی ویڈیو لوڈ ہونے کا انتظار
+            except Exception as e:
+                print(f"VPN bypass error: {e}")
+            # ----------------------------------------------
 
             ensure_video_playing(new_page)
             
@@ -268,8 +280,6 @@ def process_youtube_tasks(context, page):
                 if not bot_status["is_running"]: new_page.close(); return
                 if sec % 5 == 0: 
                     bot_status["step"] = f"Watching YT... {sec}/{remaining_time}s"
-                    try: new_page.mouse.move(random.randint(100, 800), random.randint(100, 600), steps=5)
-                    except: pass
                 time.sleep(1)
 
             new_page.close()
