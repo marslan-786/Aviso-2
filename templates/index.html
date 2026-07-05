@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Aviso Bot v9.0</title>
+    <title>Aviso Bot v9.0 Live</title>
     <style>
         body { font-family: 'Courier New', monospace; background: #0d0d0d; color: #00ff41; padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
         .container { width: 100%; max-width: 500px; background: #1a1a1a; padding: 20px; border-radius: 15px; border: 1px solid #333; }
@@ -22,11 +22,18 @@
         .status-wrapper { margin-top: 20px; background: #000; border: 1px dashed #00ff41; padding: 15px; border-radius: 8px; }
         .live-status { font-size: 16px; color: #fff; margin-top: 5px; font-weight: bold; }
         
+        .terminal-box { margin-top: 10px; background: #000; border: 1px solid #333; padding: 10px; height: 150px; overflow-y: auto; font-size: 11px; color: #0f0; border-radius: 5px; line-height: 1.4; word-wrap: break-word;}
+        .log-error { color: #ff4c4c; }
+        .log-warn { color: #ffeb3b; }
+        
         #code-area { display: none; background: #2a2000; border: 2px solid #ffcc00; padding: 15px; margin-top: 15px; border-radius: 8px; }
         .btn-code { background: #ff9800; color: black; }
 
-        .gallery-container { display: flex; overflow-x: auto; gap: 10px; padding: 10px 0; margin-top: 10px; }
-        .gallery-container img { height: 150px; border-radius: 8px; border: 2px solid #333; flex-shrink: 0; }
+        /* ---> NEW GALLERY TOGGLE STYLES <--- */
+        .gallery-header { background: #222; color: #00ff41; padding: 10px 15px; margin-top: 15px; border-radius: 8px; cursor: pointer; display: flex; justify-content: space-between; font-weight: bold; border: 1px solid #444; user-select: none; }
+        .gallery-header:hover { background: #333; }
+        .gallery-container { display: none; overflow-x: auto; gap: 10px; padding: 15px 10px; scroll-behavior: smooth; background: #0a0a0a; border: 1px dashed #444; border-top: none; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }
+        .gallery-container img { height: 150px; border-radius: 8px; border: 2px solid #333; flex-shrink: 0; cursor: pointer; object-fit: cover; }
     </style>
 </head>
 <body>
@@ -61,16 +68,25 @@
         </div>
 
         <div class="status-wrapper">
-            <div style="font-size: 12px; color: #888;">LIVE LOGS:</div>
+            <div style="font-size: 12px; color: #888;">CURRENT STEP:</div>
             <div id="status-text" class="live-status">System Ready.</div>
+            
+            <div style="font-size: 12px; color: #888; margin-top:10px;">LIVE CONSOLE:</div>
+            <div id="terminal" class="terminal-box">Waiting for bot to start...</div>
         </div>
 
+        NEW COLLAPSIBLE GALLERY <--- -->
+        <div class="gallery-header" onclick="toggleGallery()">
+            <span>🖼️ Live Screenshots</span>
+            <span id="gallery-arrow">🔽</span>
+        </div>
         <div class="gallery-container" id="gallery"></div>
-    </div>
+        </div>
 
     <script>
         const displayedImages = new Set();
         let isBotRunning = false;
+        let isGalleryOpen = false; // Gallery by default band hogi
 
         window.onload = function() {
             const savedUser = localStorage.getItem('aviso_user');
@@ -106,7 +122,6 @@
             }
         }
 
-        // --- PROXY FUNCTIONS ---
         function saveProxy() {
             const p = document.getElementById('proxyInput').value;
             fetch('/save_proxy', {
@@ -143,12 +158,44 @@
             }
         }
 
+        // ---> NEW GALLERY TOGGLE LOGIC <---
+        function toggleGallery() {
+            isGalleryOpen = !isGalleryOpen;
+            const gal = document.getElementById('gallery');
+            const arrow = document.getElementById('gallery-arrow');
+            
+            if (isGalleryOpen) {
+                gal.style.display = 'flex';
+                arrow.innerText = '🔼';
+            } else {
+                gal.style.display = 'none';
+                arrow.innerText = '🔽';
+                // Jab gallery band ho to purani tasweeren memory se nikal do
+                gal.innerHTML = '';
+                displayedImages.clear();
+            }
+        }
+        // ----------------------------------
+
         function pollStatus() {
             fetch('/status').then(r => r.json()).then(data => {
                 const statusEl = document.getElementById('status-text');
                 if (statusEl.innerText !== data.step) statusEl.innerText = data.step;
 
-                // Update Proxy Status
+                const term = document.getElementById('terminal');
+                if (data.logs && data.logs.length > 0) {
+                    let logHtml = data.logs.map(log => {
+                        if (log.includes("❌")) return `<span class="log-error">${log}</span>`;
+                        if (log.includes("⚠️") || log.includes("🚨") || log.includes("🔪")) return `<span class="log-warn">${log}</span>`;
+                        return log;
+                    }).join('<br>');
+                    
+                    if (term.innerHTML !== logHtml) {
+                        term.innerHTML = logHtml;
+                        term.scrollTop = term.scrollHeight; 
+                    }
+                }
+
                 if(data.proxy_status) {
                     document.getElementById('proxy-status').innerText = "Status: " + data.proxy_status;
                 }
@@ -169,19 +216,39 @@
                 if (data.needs_code) codeDiv.style.display = 'block';
                 else codeDiv.style.display = 'none';
 
-                const gallery = document.getElementById('gallery');
-                data.images.forEach(imgName => {
-                    if (!displayedImages.has(imgName)) {
-                        const img = document.createElement('img');
-                        img.src = `/static/screenshots/${imgName}`; 
-                        img.onclick = function() { window.open(this.src, '_blank'); };
-                        gallery.appendChild(img);
-                        displayedImages.add(imgName);
-                        if (gallery.children.length > 10) gallery.removeChild(gallery.firstElementChild);
-                        gallery.scrollLeft = gallery.scrollWidth;
-                    }
-                });
-            }).catch(e => console.log("Backend offline?"));
+                // ---> SMART IMAGE LOADING LOGIC <---
+                // Sirf tab load karega jab gallery open hogi
+                if (isGalleryOpen) {
+                    const gallery = document.getElementById('gallery');
+                    data.images.forEach(imgName => {
+                        if (!displayedImages.has(imgName)) {
+                            displayedImages.add(imgName); 
+                            
+                            const img = document.createElement('img');
+                            img.src = `/view_image/${imgName}`; 
+                            
+                            img.onerror = function() {
+                                setTimeout(() => {
+                                    this.src = `/view_image/${imgName}?retry=1`;
+                                }, 1000); 
+                            };
+
+                            img.onclick = function() { window.open(`/view_image/${imgName}`, '_blank'); };
+                            
+                            gallery.appendChild(img);
+                            if (gallery.children.length > 10) gallery.removeChild(gallery.firstElementChild);
+                            
+                            setTimeout(() => {
+                                gallery.scrollLeft = gallery.scrollWidth;
+                            }, 100);
+                        }
+                    });
+                }
+                // -----------------------------------
+
+            }).catch(e => {
+                // Connection error handle
+            });
         }
         setInterval(pollStatus, 1000);
     </script>
