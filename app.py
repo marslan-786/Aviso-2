@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import threading
@@ -6,6 +7,7 @@ import random
 import shutil
 import datetime
 import subprocess
+import requests
 from flask import Flask, render_template, request, jsonify, send_file
 
 app = Flask(__name__)
@@ -16,7 +18,11 @@ os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 USER_DATA_DIR = "/app/browser_data"
 DEBUG_FILE = "debug_source.html"
 PROXY_FILE = "proxy_config.txt"
-COOKIES_FILE = "youtube_cookies.json"  # <-- YouTube Cookies File
+COOKIES_FILE = "youtube_cookies.json"
+
+# --- Telegram Configuration ---
+TELEGRAM_BOT_TOKEN = "7766363398:AAFEfLCKw4jTOqMyTv6baeE5XGCfjHKClFc"  # <-- یہاں اپنا ٹیلیگرام بوٹ ٹوکن ڈالیں
+TELEGRAM_CHAT_ID = "-1004480322983"      # <-- یہاں اپنی گروپ یا چینل کی چیٹ آئی ڈی ڈالیں
 
 # --- Shared State ---
 shared_data = {"otp_code": None}
@@ -90,46 +96,6 @@ def inject_youtube_cookies(context):
     else:
         print("⚠️ youtube_cookies.json file not found. Running without injected cookies.")
 
-# --- JS SCANNERS ---
-def get_best_task_via_js(page):
-    return page.evaluate("""() => {
-        const tables = Array.from(document.querySelectorAll('table[id^="ads-link-"]'));
-        for (let table of tables) {
-            if (table.offsetParent === null) continue;
-            const rect = table.getBoundingClientRect();
-            if (rect.height === 0 || rect.width === 0) continue; 
-            const style = window.getComputedStyle(table);
-            if (style.display === 'none' || style.visibility === 'hidden') continue;
-            const idPart = table.id.replace('ads-link-', '');
-            if (!table.querySelector('.ybprosm')) continue;
-            const timerInput = document.getElementById('ads_timer_' + idPart);
-            const duration = timerInput ? parseInt(timerInput.value) : 20;
-            return {
-                id: idPart, duration: duration, tableId: table.id,
-                startSelector: '#link_ads_start_' + idPart,
-                confirmSelector: '#ads_btn_confirm_' + idPart
-            };
-        }
-        return null; 
-    }""")
-
-def get_surfing_tasks(page):
-    return page.evaluate("""() => {
-        const buttons = Array.from(document.querySelectorAll('.start-surfing-btn'));
-        for (let btn of buttons) {
-            if (btn.offsetParent === null) continue;
-            const id = btn.getAttribute('data-surfing-id');
-            const timer = parseInt(btn.getAttribute('data-timer')) || 20;
-            const url = btn.getAttribute('data-url');
-            return {
-                id: id, timer: timer, url: url,
-                startSelector: `a[data-surfing-id="${id}"]`
-            };
-        }
-        return null;
-    }""")
-
-# --- HUMAN MOUSE SIMULATION ---
 def perform_human_mouse_click(page, selector, screenshot_name):
     try:
         if not page.is_visible(selector): return False
@@ -153,11 +119,9 @@ def perform_human_mouse_click(page, selector, screenshot_name):
             }}""")
             
             take_screenshot(page, screenshot_name)
-            
             page.mouse.down()
             time.sleep(random.uniform(0.05, 0.15))
             page.mouse.up()
-            
             time.sleep(0.5)
             page.evaluate("if(document.getElementById('click-dot')) document.getElementById('click-dot').remove();")
             return True
@@ -165,225 +129,223 @@ def perform_human_mouse_click(page, selector, screenshot_name):
         print(f"Mouse Error: {e}")
     return False
 
-# --- FORCE VIDEO PLAY ---
-def ensure_video_playing(page):
-    try:
-        if page.is_visible(".ytp-large-play-button"):
-            perform_human_mouse_click(page, ".ytp-large-play-button", "Play_RedButton_Click")
-            time.sleep(2)
-            return
+# --- NEW UPGRADED JS SCANNERS ---
+def get_high_value_tasks_via_js(page):
+    """Scans the master task table and filters items paying >= 5 Rubles."""
+    return page.evaluate("""() => {
+        const targetTasks = [];
+        const rows = document.querySelectorAll('table#work-task tr[id*="block-task"]');
+        
+        rows.forEach(row => {
+            const linkEl = row.querySelector('a.earn-task__title-link');
+            if (!linkEl) return;
+            
+            const href = linkEl.getAttribute('href');
+            const idMatch = href.match(/adv=(\d+)/);
+            const taskId = idMatch ? idMatch[1] : null;
+            
+            const priceEl = row.querySelector('td[style*="text-align: right"] span, td[style*="padding-right"] span');
+            let price = 0.0;
+            
+            if (priceEl) {
+                const priceText = priceEl.innerText || priceEl.textContent;
+                const cleanPrice = priceText.match(/([\d\.,]+)\s*руб/);
+                if (cleanPrice) {
+                    price = parseFloat(cleanPrice[1].replace(',', '.'));
+                }
+            }
+            
+            if (taskId && price >= 5.0) {
+                targetTasks.push({
+                    id: taskId,
+                    price: price,
+                    url: 'https://aviso.bz' + href
+                });
+            }
+        });
+        
+        return targetTasks;
+    }""")
 
-        viewport = page.viewport_size
-        if viewport:
-            cx = viewport['width'] / 2
-            cy = viewport['height'] / 2
-            page.mouse.move(cx, cy, steps=10)
-            page.mouse.down(); time.sleep(0.2); page.mouse.up()
-            time.sleep(2)
+def extract_task_page_details(page):
+    """Extracts structural textual details inside the specific task read page."""
+    return page.evaluate("""() => {
+        const titleEl = document.querySelector('h1.title');
+        const title = titleEl ? titleEl.innerText.trim() : 'Unknown Task Title';
+        
+        let category = 'Unknown';
+        const tds = Array.from(document.querySelectorAll('td'));
+        for (let td of tds) {
+            if (td.innerText.includes('Категория:')) {
+                category = td.innerText.replace('Категория:', '').trim();
+                break;
+            }
+        }
+        
+        let description = '';
+        let requirement = '';
+        const tikets = Array.from(document.querySelectorAll('.tiket'));
+        
+        tikets.forEach(t => {
+            if (t.innerText.includes('Описание задания')) {
+                if (t.nextElementSibling) description = t.nextElementSibling.innerText.trim();
+            }
+            if (t.innerText.includes('Что нужно указать для выполнения задания')) {
+                if (t.nextElementSibling) requirement = t.nextElementSibling.innerText.trim();
+            }
+        });
+        
+        return {
+            title: title,
+            category: category,
+            description: description,
+            requirement: requirement
+        };
+    }""")
 
-        page.keyboard.press("Space")
-    except: pass
-
-# --- PROCESS YOUTUBE TASKS ---
-# --- PROCESS YOUTUBE TASKS ---
-def process_youtube_tasks(context, page):
-    bot_status["step"] = "Checking YouTube Tasks..."
-    page.goto("https://aviso.bz/tasks-youtube")
-    page.wait_for_load_state("networkidle")
+# --- SILENT-AI PRO STREAMING CLIENT (GO ENGINE CONVERTED TO PYTHON) ---
+def analyze_with_silent_ai_stream(task_data):
+    """Connects to Silent-AI streaming API, buffers text responses, filters and cleans output formatting."""
+    url = "https://silent-ai-pro-phi.vercel.app/api/ask"
+    headers = {"Content-Type": "application/json"}
     
-    time.sleep(2) 
+    persona = (
+        "You are a silent ai made by Nothing Is Impossible.\n"
+        "RULES:\n"
+        "1. CASUAL CHAT: If the user says hi/hello or talks casually, be friendly and short.\n"
+        "2. HAPPY MODE: If the user angry you send always smile emoji and happy response.\n"
+        "3. HINDI BLOCK: STRICTLY NO HINDI (Devanagari script). Reply only in Roman Urdu or clean Urdu text.\n"
+        "4. SHORT ANSWER: Always Short Answer Send.\n"
+        "5. MEMORY: Always keep context in mind from previous turns in the conversation.\n"
+        "6. TASK CRITERIA: You are analyzing a micro-task from Aviso.bz. If it requires real money deposits, purchasing accounts, investments, or bank card validation, reply EXACTLY with the single word 'REJECT'. If it is an easy/free task (like website registration without deposit, joining a Telegram channel/bot, micro app installation, simple social media subscription), mark it APPROVED and output a neat step-by-step user guide in Roman Urdu or Urdu text explaining exactly what to perform and what information/screenshot to provide as proof."
+    )
     
-    if page.is_visible("input[name='username']"): return
-
-    # ---> MAIN PAGE POPUP HANDLER <---
+    compiled_prompt = (
+        f"{persona}\n\n"
+        f"User: Please analyze this micro-task:\n"
+        f"Title: {task_data['title']}\n"
+        f"Category: {task_data['category']}\n"
+        f"Description: {task_data['description']}\n"
+        f"Proof Required: {task_data['requirement']}\n\n"
+        f"AI:"
+    )
+    
+    request_body = {
+        "key": "silent-ai",
+        "prompt": compiled_prompt
+    }
+    
+    raw_response = ""
     try:
-        popup_selector = "text='Я ознакомлен'"
-        if page.is_visible(popup_selector):
-            print("🚨 Info popup detected! Clicking 'Я ознакомлен'...")
-            bot_status["step"] = "Closing Notice Popup..."
-            perform_human_mouse_click(page, popup_selector, "Popup_Closed")
-            time.sleep(2) 
+        # stream=True sets up the streaming buffer line processing loop
+        resp = requests.post(url, json=request_body, headers=headers, stream=True, timeout=90)
+        if resp.status_code != 200:
+            return None
+            
+        for line in resp.iter_lines():
+            if not bot_status["is_running"]: break
+            if line:
+                decoded_line = line.decode('utf-8').strip()
+                if decoded_line.startswith("data: "):
+                    json_str = decoded_line[6:]
+                    try:
+                        data_chunk = json.loads(json_str)
+                        if data_chunk.get("type") == "text":
+                            raw_response += data_chunk.get("text", "")
+                    except:
+                        pass
     except Exception as e:
-        pass
-
-    page.evaluate("if(document.getElementById('clouse_adblock')) document.getElementById('clouse_adblock').remove();")
-    save_debug_html(page, "Tasks_Loaded")
-    take_screenshot(page, "0_Task_List")
-
-    for i in range(1, 15): # Max 15 YT tasks
-        if not bot_status["is_running"]: break
+        print(f"❌ [AI Stream Core Error]: {e}")
+        return None
         
-        bot_status["step"] = f"Scanning YT Task #{i}..."
-        task_data = get_best_task_via_js(page)
+    ai_reply_text = raw_response.strip()
+    if not ai_reply_text or "REJECT" in ai_reply_text:
+        return None
         
-        if not task_data:
-            print("No YT tasks.")
-            bot_status["step"] = "No YT Tasks Visible."
-            break
-            
-        print(f"YT Task: {task_data['id']} ({task_data['duration']}s)")
+    # Formatting adjustments directly replicated from your Go regex logic
+    ai_reply_text = ai_reply_text.replace("**", "*")
+    ai_reply_text = re.sub(r'(?m)^#{1,6}\s+(.*)$', r'*\1*', ai_reply_text)
+    return ai_reply_text
+
+# --- TELEGRAM DELIVERY TRANSMITTER ---
+def fire_alert_to_telegram(task_url, price, ai_content):
+    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or TELEGRAM_CHAT_ID == "YOUR_CHAT_ID_HERE":
+        print("⚠️ Telegram details unconfigured. Skipping broadcast.")
+        return False
         
-        try:
-            page.evaluate(f"document.getElementById('{task_data['tableId']}').scrollIntoView({{behavior: 'smooth', block: 'center'}});")
-            time.sleep(1)
-            take_screenshot(page, f"YT_{i}_Target")
+    telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    formatted_msg = (
+        f"🎯 *New Easy Task Identified!*\n"
+        f"💰 *Payout Value:* {price} руб.\n"
+        f"🔗 *Task URL:* [Open Task Dashboard]({task_url})\n\n"
+        f"{ai_content}"
+    )
+    
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": formatted_msg,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
+    try:
+        requests.post(telegram_url, json=payload, timeout=12)
+        return True
+    except:
+        return False
 
-            initial_pages = len(context.pages)
-            if not perform_human_mouse_click(page, task_data['startSelector'], f"YT_{i}_Start_Click"):
-                page.reload(); continue
-            
-            time.sleep(5)
-            if len(context.pages) == initial_pages:
-                page.evaluate(f"document.querySelector('{task_data['startSelector']}').click();")
-                time.sleep(5)
-                if len(context.pages) == initial_pages: page.reload(); continue
-
-            new_page = context.pages[-1]
-            new_page.wait_for_load_state("domcontentloaded")
-            new_page.bring_to_front()
-            
-            bot_status["step"] = f"YT Task #{i}: Loading Video/VPN Page..."
-            time.sleep(4) # تھوڑا ٹائم دیا تاکہ وی پی این والا پیج صحیح سے لوڈ ہو جائے
-            
-            # ---> NEW: VPN WARNING HANDLER FOR NEW TAB <---
-            try:
-                vpn_btn_selector = "text='Я ознакомлен'"
-                # چیک کرتے ہیں کہ کیا 5 سیکنڈ کے اندر یہ بٹن شو ہوتا ہے
-                btn_visible = False
-                for _ in range(5):
-                    if new_page.is_visible(vpn_btn_selector):
-                        btn_visible = True
-                        break
-                    time.sleep(1)
-
-                if btn_visible:
-                    print(f"🚨 VPN Warning detected on YT Task #{i}! Clicking to proceed...")
-                    bot_status["step"] = "Bypassing VPN Warning..."
-                    clicked = perform_human_mouse_click(new_page, vpn_btn_selector, f"YT_{i}_VPN_Bypass")
-                    if not clicked:
-                        new_page.click(vpn_btn_selector) # اگر ماؤس کلک فیل ہو تو ڈائریکٹ کلک کر دے
-                    time.sleep(4) # کلک کرنے کے بعد اصلی ویڈیو لوڈ ہونے کا انتظار
-            except Exception as e:
-                print(f"VPN bypass error: {e}")
-            # ----------------------------------------------
-
-            ensure_video_playing(new_page)
-            
-            bot_status["step"] = "Checking if playing (10s wait)..."
-            time.sleep(10)
-            take_screenshot(new_page, f"YT_{i}_Playing_Proof_10s")
-            
-            remaining_time = (task_data['duration'] + random.randint(2, 5)) - 10
-            if remaining_time < 0: remaining_time = 0
-            
-            for sec in range(remaining_time):
-                if not bot_status["is_running"]: new_page.close(); return
-                if sec % 5 == 0: 
-                    bot_status["step"] = f"Watching YT... {sec}/{remaining_time}s"
-                time.sleep(1)
-
-            new_page.close()
-            page.bring_to_front()
-            time.sleep(1)
-            take_screenshot(page, f"YT_{i}_Back_Main")
-
-            confirm_selector = task_data['confirmSelector']
-            bot_status["step"] = "Confirming YT..."
-            
-            btn_visible = False
-            for _ in range(8):
-                if page.is_visible(confirm_selector): btn_visible = True; break
-                time.sleep(1)
-            
-            if btn_visible:
-                perform_human_mouse_click(page, confirm_selector, f"YT_{i}_Confirm_Click")
-                time.sleep(5)
-                take_screenshot(page, f"YT_{i}_Success")
-                bot_status["step"] = f"YT Task #{i} Done!"
-                save_debug_html(page, f"YT_{i}_Success")
-            else:
-                page.reload(); time.sleep(3); break
-
-        except Exception as e:
-            print(f"YT Error: {e}")
-            try: context.pages[-1].close() if len(context.pages) > 1 else None
-            except: pass
-            page.reload(); time.sleep(5); break
-
-# --- PROCESS SURFING TASKS (NEW) ---
-def process_surfing_tasks(context, page):
-    print("🏄 Starting Surfing Module...")
-    bot_status["step"] = "Switching to Surfing..."
-    page.goto("https://aviso.bz/tasks-surf")
+# --- TASK SCHEDULER CORE RUNNER ---
+def process_high_value_scrapes(context, page):
+    """Orchestrates navigation to task pool, filtering, data mining, and alert routing."""
+    bot_status["step"] = "🔍 Reading Task List Page..."
+    page.goto("https://aviso.bz/tasks")
     page.wait_for_load_state("networkidle")
+    time.sleep(2)
     
     if page.is_visible("input[name='username']"): return
-
-    for i in range(1, 20): # Max 20 Surfs
+    
+    save_debug_html(page, "Task_Pool_Index")
+    take_screenshot(page, "Task_Index_View")
+    
+    bot_status["step"] = "⚙️ Filtering tasks >= 5 Rubles..."
+    eligible_tasks = get_high_value_tasks_via_js(page)
+    
+    if not eligible_tasks:
+        bot_status["step"] = "⚠️ No matching high-value tasks found."
+        print("No tasks met the minimum criteria.")
+        return
+        
+    print(f"Successfully tracked {len(eligible_tasks)} candidate jobs.")
+    
+    for iteration, task in enumerate(eligible_tasks, 1):
         if not bot_status["is_running"]: break
         
-        task = get_surfing_tasks(page)
-        if not task:
-            print("No Surfing tasks.")
-            bot_status["step"] = "No Surf Tasks."
-            break
-            
-        print(f"Surf Task: {task['id']} ({task['timer']}s)")
-        bot_status["step"] = f"Surfing #{i}: {task['timer']}s"
+        bot_status["step"] = f"🚀 Going to Task {iteration}/{len(eligible_tasks)} (ID: {task['id']})"
+        print(f"Inspecting High Value Target ID: {task['id']}")
         
         try:
-            page.evaluate(f"document.querySelector('{task['startSelector']}').scrollIntoView({{behavior: 'smooth', block: 'center'}});")
-            time.sleep(1)
-            take_screenshot(page, f"Surf_{i}_Target")
-
-            # Click Start
-            initial_pages = len(context.pages)
-            if not perform_human_mouse_click(page, task['startSelector'], f"Surf_{i}_Start"):
-                page.reload(); continue
+            page.goto(task['url'])
+            page.wait_for_load_state("networkidle")
+            time.sleep(1.5)
             
-            time.sleep(5)
-            if len(context.pages) == initial_pages:
-                page.click(task['startSelector']) # JS Fallback
-                time.sleep(5)
-                if len(context.pages) == initial_pages: page.reload(); continue
-
-            # Watch Site
-            new_page = context.pages[-1]
-            new_page.bring_to_front()
+            bot_status["step"] = f"📋 Extracting HTML Details for {task['id']}..."
+            scraped_payload = extract_task_page_details(page)
             
-            wait_time = task['timer'] + random.randint(3, 6)
-            bot_status["step"] = f"Surfing... ({wait_time}s)"
+            bot_status["step"] = f"🧠 Sending Task {task['id']} to Silent-AI Stream..."
+            processed_guide = analyze_with_silent_ai_stream(scraped_payload)
             
-            for s in range(wait_time):
-                if not bot_status["is_running"]: new_page.close(); return
-                if s % 2 == 0: 
-                    try: new_page.mouse.move(random.randint(100,800), random.randint(100,600))
-                    except: pass
+            if processed_guide:
+                bot_status["step"] = f"📢 Firing Easy Task {task['id']} to Telegram Group..."
+                fire_alert_to_telegram(task['url'], task['price'], processed_guide)
+                print(f"✅ Successfully dispatched processed task profile for ID: {task['id']}")
                 time.sleep(1)
-            
-            new_page.close()
-            page.bring_to_front()
-            
-            # Confirm
-            bot_status["step"] = "Confirming Surf..."
-            time.sleep(2) 
-            confirm_sel = f"#serf_btn_confirm_{task['id']}"
-            
-            if page.is_visible(confirm_sel):
-                perform_human_mouse_click(page, confirm_sel, f"Surf_{i}_Confirm")
-                time.sleep(4)
-                take_screenshot(page, f"Surf_{i}_Done")
             else:
-                print("Surf Confirm missing.")
-                page.reload(); time.sleep(3)
+                print(f"❌ AI safely omitted or skipped Task ID: {task['id']}")
+                
+        except Exception as err:
+            print(f"Error handling sequential task extraction loop item: {err}")
+            continue
 
-        except Exception as e:
-            print(f"Surf Error: {e}")
-            try: context.pages[-1].close() if len(context.pages) > 1 else None
-            except: pass
-            page.reload(); time.sleep(3)
-
-# --- MAIN RUNNER ---
+# --- MAIN RUNNER LOOP ---
 def run_infinite_loop(username, password):
     global bot_status, shared_data, current_browser_context
     from playwright.sync_api import sync_playwright
@@ -414,9 +376,7 @@ def run_infinite_loop(username, password):
                     args=["--disable-blink-features=AutomationControlled", "--disable-background-timer-throttling", "--start-maximized"]
                 )
                 
-                # ---> Inject YouTube Cookies Here <---
                 inject_youtube_cookies(context)
-                
                 current_browser_context = context
                 page = context.new_page()
                 
@@ -440,19 +400,14 @@ def run_infinite_loop(username, password):
                     time.sleep(5)
                     take_screenshot(page, "After_Login_Click")
 
-                    # --- SAFE FORCE SUBMIT FIX ---
                     if page.is_visible("input[name='username']"):
                         if "подождите" not in page.content().lower():
                             print("Button failed. Attempting safe submit...")
                             bot_status["step"] = "Force Submitting..."
-                            
-                            # Crash Fix: Check if form exists before submit
                             page.evaluate("""() => {
                                 const form = document.querySelector('form[action*="login"]') || document.querySelector('form');
                                 if(form) { form.submit(); } 
                             }""")
-                            
-                            # Backup Enter Key
                             page.keyboard.press("Enter")
                             time.sleep(8)
 
@@ -478,20 +433,12 @@ def run_infinite_loop(username, password):
                         context.close()
                         continue
                 
-                bot_status["step"] = "Login Success!"
+                bot_status["step"] = "🟢 Login Success!"
                 take_screenshot(page, "Login_Success")
 
-                # --- 1. YOUTUBE TASKS ---
-                process_youtube_tasks(context, page)
+                # --- NEW REWRITTEN PROCESSING SYSTEM ---
+                process_high_value_scrapes(context, page)
                 
-                # --- 2. SURFING TASKS ---
-                process_surfing_tasks(context, page)
-                
-                # --- 3. CHECK YOUTUBE AGAIN ---
-                print("Checking YT again...")
-                process_youtube_tasks(context, page)
-
-                # --- 4. LOGOUT & SLEEP ---
                 print("Cycle Complete. Logging Out...")
                 try:
                     page.goto("https://aviso.bz/logout")
@@ -501,7 +448,7 @@ def run_infinite_loop(username, password):
                 
                 context.close()
                 print("Sleeping 20 mins...")
-                for s in range(1200): # 20 Mins
+                for s in range(1200):
                     if not bot_status["is_running"]: return
                     if s % 10 == 0: 
                         rem = 1200 - s
