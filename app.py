@@ -19,7 +19,7 @@ USER_DATA_DIR = "/app/browser_data"
 DEBUG_FILE = "debug_source.html"
 PROXY_FILE = "proxy_config.txt"
 COOKIES_FILE = "youtube_cookies.json"
-PROCESSED_TASKS_FILE = "processed_tasks.txt"  # <-- ٹاسک ہسٹری فائل
+PROCESSED_TASKS_FILE = "processed_tasks.txt"
 
 # --- Telegram Configuration ---
 TELEGRAM_BOT_TOKEN = "7766363398:AAFEfLCKw4jTOqMyTv6baeE5XGCfjHKClFc"  
@@ -141,7 +141,7 @@ def perform_human_mouse_click(page, selector, screenshot_name):
         print(f"Mouse Error: {e}")
     return False
 
-# --- UPGRADED JS SCANNERS (MINIMUM 2 RUBLES LOCK) ---
+# --- JS SCANNERS (2 RUBLES LOCK) ---
 def get_high_value_tasks_via_js(page):
     """Scans the master task table and filters items paying >= 2.0 Rubles."""
     return page.evaluate("""() => {
@@ -167,7 +167,6 @@ def get_high_value_tasks_via_js(page):
                 }
             }
             
-            // یہاں اب 5.0 کی جگہ 2.0 پے لاک کر دیا ہے
             if (taskId && price >= 2.0) {
                 targetTasks.push({
                     id: taskId,
@@ -220,17 +219,17 @@ def analyze_with_silent_ai_stream(task_data):
     url = "https://silent-ai-pro-phi.vercel.app/api/ask"
     headers = {"Content-Type": "application/json"}
     
-    # یہاں پرامپٹ میں ربل کی کمانڈ ایڈ کر دی ہے
+    # اے آئی پرامپٹ کو ربل ہٹا کر "RUB" پر لاک کر دیا ہے
     persona = (
         "You are a silent ai made by Nothing Is Impossible.\n"
         "RULES:\n"
         "1. CASUAL CHAT: If the user says hi/hello or talks casually, be friendly and short.\n"
         "2. HAPPY MODE: If the user angry you send always smile emoji and happy response.\n"
-        "3. HINDI BLOCK: STRICTLY NO HINDI (Devanagari script). Reply only in Roman Urdu or clean Urdu text.\n"
-        "4. SHORT ANSWER: Always Short Answer Send.\n"
-        "5. MEMORY: Always keep context in mind from previous turns in the conversation.\n"
-        "6. CURRENCY RULES: Strictly convert any text like 'py6', 'руб', 'rub', or 'rubles' into 'ربل'. Never write 'py6'.\n"
-        "7. TASK CRITERIA: You are analyzing a micro-task from Aviso.bz. If it requires real money deposits, purchasing accounts, investments, or bank card validation, reply EXACTLY with the single word 'REJECT'. If it is an easy/free task (like website registration without deposit, joining a Telegram channel/bot, micro app installation, simple social media subscription), mark it APPROVED and output a neat step-by-step user guide in Roman Urdu or Urdu text explaining exactly what to perform and what information/screenshot to provide as proof."
+        "3. LANGUAGE STYLE: Reply ONLY in standard, clean Roman Urdu prose (Hinglish script like 'Task mukammal karen', 'Screenshot attach karen'). Do NOT use pure Arabic/Urdu alphabet text script.\n"
+        "4. CURRENCY RULES: Strictly convert any currency mention like 'py6', 'руб', 'rub', 'rubles', or 'ربل' into upper-case standard letters 'RUB' (e.g., write '3 RUB' or '3.5 RUB'). Never write raw letters 'py6' or Urdu script 'ربل'.\n"
+        "5. LINK INTEGRATION: When mentioning a link or a bot, output it as a clean markdown link like [Click Here](url) or [Telegram Bot](url). NEVER wrap markdown links inside extra parentheses like ([text](url)) and never duplicate the raw link text next to it.\n"
+        "6. SHORT ANSWER: Always Keep instructions clean and short.\n"
+        "7. TASK CRITERIA: You are analyzing a micro-task from Aviso.bz. If it requires real money deposits, purchasing accounts, investments, or bank card validation, reply EXACTLY with the single word 'REJECT'. If it is an easy/free task (like website registration without deposit, joining a Telegram channel/bot, micro app installation, simple social media subscription), mark it APPROVED and output a neat step-by-step user guide explaining exactly what to perform and what information/screenshot to provide as proof."
     )
     
     compiled_prompt = (
@@ -277,8 +276,9 @@ def analyze_with_silent_ai_stream(task_data):
     ai_reply_text = ai_reply_text.replace("**", "*")
     ai_reply_text = re.sub(r'(?m)^#{1,6}\s+(.*)$', r'*\1*', ai_reply_text)
     
-    # محفوظ ترین فکس: اگر AI پھر بھی غلطی سے py6 یا روبل لکھ دے تو یہاں ربل سے ریپلیس ہو جائے گا
-    ai_reply_text = re.sub(r'(?i)py6|руб|руб\.|rub|rubles', 'ربل', ai_reply_text)
+    # فکس لنکس اور کرنسی ہارڈ کوڈ ریپلیس فلٹر (ربل اور py6 کو ہمیشہ RUB کرے گا)
+    ai_reply_text = re.sub(r'\(\s*\[([^\]]+)\]\(([^)]+)\)\s*\)', r'[\1](\2)', ai_reply_text)
+    ai_reply_text = re.sub(r'(?i)py6|руб|руб\.|rubles\b|rub\b|ربل', 'RUB', ai_reply_text)
     
     return ai_reply_text
 
@@ -290,10 +290,10 @@ def fire_alert_to_telegram(task_url, price, ai_content):
         
     telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    # یہاں فائنل میسج میں بھی "ربل" فکس کر دیا ہے
+    # یہاں فائنل ٹیلیگرام لے آؤٹ میں "RUB" سیٹ کر دیا ہے
     formatted_msg = (
         f"🎯 *New Easy Task Identified!*\n"
-        f"💰 *Payout Value:* {price} ربل\n"
+        f"💰 *Payout Value:* {price} RUB\n"
         f"🔗 *Task URL:* [Open Task Dashboard]({task_url})\n\n"
         f"{ai_content}"
     )
@@ -310,8 +310,9 @@ def fire_alert_to_telegram(task_url, price, ai_content):
     except:
         return False
 
-# --- TASK SCHEDULER CORE RUNNER ---
+# --- TASK SCHEDULER CORE RUNNER (DYNAMIC RETRY SCROLL SYSTEM) ---
 def process_high_value_scrapes(context, page):
+    """Processes currently visible tasks via independent tabs, scrolling dynamically UNTIL unique tasks are found."""
     bot_status["step"] = "🔍 Reading Task List Page..."
     page.goto("https://aviso.bz/tasks")
     page.wait_for_load_state("networkidle")
@@ -319,69 +320,88 @@ def process_high_value_scrapes(context, page):
     
     if page.is_visible("input[name='username']"): return
     
-    # --- آٹومیٹک اسکرولنگ اور ٹاسک لوڈنگ لوپ ---
-    bot_status["step"] = "📜 Scrolling down to trigger dynamic new tasks..."
-    for i in range(5):  # 5 دفعہ اسکرول ڈاؤن اور اپ کرے گا تا کہ نئے ٹاسک لوڈ ہو جائیں
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(1.5)
-        page.evaluate("window.scrollBy(0, -350);")  # تھوڑا سا اوپر اسکرول کرے گا تاکہ نیو ٹاسک فوراً ٹریگر ہوں
-        time.sleep(0.5)
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(1)
-
-    save_debug_html(page, "Task_Pool_Index")
-    take_screenshot(page, "Task_Index_View")
-    
-    bot_status["step"] = "⚙️ Filtering tasks >= 2 Rubles..."
-    eligible_tasks = get_high_value_tasks_via_js(page)
-    
-    if not eligible_tasks:
-        bot_status["step"] = "⚠️ No matching high-value tasks found."
-        print("No tasks met the minimum criteria.")
-        return
-        
-    # ہسٹری لوڈ کریں تا کہ ڈوپلیکیٹ فلٹر ہو سکیں
     processed_history = load_processed_tasks()
-    unique_tasks = [t for t in eligible_tasks if t['id'] not in processed_history]
     
-    if not unique_tasks:
-        bot_status["step"] = "🔄 All available tasks already processed. (Skipping Duplicates)"
-        print("No new unique tasks found in this cycle.")
-        return
-        
-    print(f"Successfully tracked {len(unique_tasks)} new candidate jobs out of {len(eligible_tasks)} detected.")
-    
-    for iteration, task in enumerate(unique_tasks, 1):
-        if not bot_status["is_running"]: break
-        
-        bot_status["step"] = f"🚀 Going to Task {iteration}/{len(unique_tasks)} (ID: {task['id']})"
-        print(f"Inspecting Target ID: {task['id']}")
-        
-        try:
-            page.goto(task['url'])
-            page.wait_for_load_state("networkidle")
-            time.sleep(1.5)
+    while bot_status["is_running"]:
+        bot_status["step"] = "⚙️ Scanning current viewport tasks..."
+        eligible_tasks = get_high_value_tasks_via_js(page)
+        if not eligible_tasks:
+            eligible_tasks = []
             
-            bot_status["step"] = f"📋 Extracting HTML Details for {task['id']}..."
-            scraped_payload = extract_task_page_details(page)
+        unique_tasks = [t for t in eligible_tasks if t['id'] not in processed_history]
+        
+        # اگر کوئی نیا ٹاسک لسٹ میں نظر نہیں آ رہا، تو جب تک نیا ٹاسک نہ ملے اسکرول لوپ چلائیں
+        if not unique_tasks:
+            bot_status["step"] = "📜 No new tasks visible. Initializing active scroll loop..."
+            consecutive_scrolls = 0
+            max_scroll_limit = 25  # سیفٹی کیپ تاکہ اگر پیج بالکل ختم ہو جائے تو ہینگ نہ ہو
             
-            bot_status["step"] = f"🧠 Sending Task {task['id']} to Silent-AI Stream..."
-            processed_guide = analyze_with_silent_ai_stream(scraped_payload)
-            
-            if processed_guide:
-                bot_status["step"] = f"📢 Firing Easy Task {task['id']} to Telegram Group..."
-                fire_alert_to_telegram(task['url'], task['price'], processed_guide)
-                print(f"✅ Successfully dispatched processed task profile for ID: {task['id']}")
+            while not unique_tasks and consecutive_scrolls < max_scroll_limit and bot_status["is_running"]:
+                consecutive_scrolls += 1
+                bot_status["step"] = f"📜 Searching new tasks... Scroll attempt {consecutive_scrolls}"
+                print(f"Scrolling dynamically down/up to pull new elements. Attempt: {consecutive_scrolls}")
                 
-                # ہسٹری میں سیو کریں تاکہ دوبارہ یہ ٹاسک سینڈ نہ ہو
+                try:
+                    # فل نیچے اسکرول کریں
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(1.5)
+                    # آپ کی بتائی ہوئی ٹرک: تھوڑا سا اوپر اسکرول کریں تا کہ ویب سائٹ کی آٹو لوڈنگ فورا جاگے
+                    page.evaluate("window.scrollBy(0, -350);")
+                    time.sleep(0.6)
+                    # دوبارہ نیچے لے جائیں تا کہ اسٹیبل ہو جائے
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(1.5)
+                except Exception as scroll_err:
+                    print(f"Scroll iteration failed: {scroll_err}")
+                    break
+                
+                # دوبارہ چیک کریں کہ کیا اسکرول کرنے سے لسٹ میں نئے ٹاسک لوڈ ہوئے ہیں؟
+                eligible_tasks = get_high_value_tasks_via_js(page) or []
+                unique_tasks = [t for t in eligible_tasks if t['id'] not in processed_history]
+            
+            # اگر اتنی بار اسکرول کرنے پر بھی کوئی نیا ٹاسک نہیں ملا، اس کا مطلب اب مزید ٹاسکس موجود نہیں ہیں
+            if not unique_tasks:
+                print("End of list reached or no unique tasks generated dynamically.")
+                bot_status["step"] = "⚠️ Reached end of available pool."
+                break
+        
+        # جیسے ہی نئے ٹاسک لسٹ میں ڈیٹیکٹ ہوں گے، اسکرولنگ فوراً رک جائے گی اور پروسیسنگ شروع ہوگی
+        print(f"Loop stopped scrolling. Found {len(unique_tasks)} new unique tasks to execute.")
+        
+        for iteration, task in enumerate(unique_tasks, 1):
+            if not bot_status["is_running"]: break
+            
+            bot_status["step"] = f"🚀 Opening Task ID: {task['id']} in a New Tab..."
+            try:
+                task_page = context.new_page()
+                task_page.goto(task['url'], timeout=45000)
+                task_page.wait_for_load_state("networkidle")
+                time.sleep(1.5)
+                
+                scraped_payload = extract_task_page_details(task_page)
+                task_page.close()  # ڈیٹا نکال کر فوراً کلوز، مین پیج کی پوزیشن برقرار رہے گی
+                
+                bot_status["step"] = f"🧠 Analyzing Task {task['id']} with Silent-AI..."
+                processed_guide = analyze_with_silent_ai_stream(scraped_payload)
+                
+                if processed_guide:
+                    bot_status["step"] = f"📢 Firing Task {task['id']} to Telegram..."
+                    fire_alert_to_telegram(task['url'], task['price'], processed_guide)
+                    print(f"✅ Dispatched processed task profile for ID: {task['id']}")
+                    
                 save_processed_task(task['id'])
+                processed_history.add(task['id'])
                 time.sleep(1)
-            else:
-                print(f"❌ AI safely omitted or skipped Task ID: {task['id']}")
                 
-        except Exception as err:
-            print(f"Error handling sequential task extraction loop item: {err}")
-            continue
+            except Exception as err:
+                print(f"Error handling isolated tab processing: {err}")
+                try: task_page.close()
+                except: pass
+                save_processed_task(task['id'])
+                processed_history.add(task['id'])
+                continue
+                
+    print("Scrape cycle finalized successfully.")
 
 # --- MAIN RUNNER LOOP ---
 def run_infinite_loop(username, password):
@@ -474,7 +494,7 @@ def run_infinite_loop(username, password):
                 bot_status["step"] = "🟢 Login Success!"
                 take_screenshot(page, "Login_Success")
 
-                # ٹاسک پراسیسنگ رن کریں
+                # ایڈوانسڈ ڈائنامک لوپ رن کریں
                 process_high_value_scrapes(context, page)
                 
                 print("Cycle Complete. Logging Out...")
