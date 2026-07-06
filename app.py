@@ -487,7 +487,8 @@ def start_telegram_bot():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
     print("🤖 Telegram Bot Thread Engine Initialized.")
-    application.run_polling(close_loop=False)
+    application.run_polling(close_loop=False, stop_signals=None)
+
 
 # --- FLASK ROUTES ---
 @app.route('/')
