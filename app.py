@@ -8,7 +8,10 @@ import shutil
 import datetime
 import subprocess
 import requests
+import asyncio
 from flask import Flask, render_template, request, jsonify, send_file, make_response
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 app = Flask(__name__)
 
@@ -20,32 +23,48 @@ DEBUG_FILE = "debug_source.html"
 PROXY_FILE = "proxy_config.txt"
 COOKIES_FILE = "youtube_cookies.json"
 PROCESSED_TASKS_FILE = "processed_tasks.txt"
+TRACKED_TASKS_FILE = "tracked_tasks.json"
 
 # --- Telegram Configuration ---
 TELEGRAM_BOT_TOKEN = "7766363398:AAFEfLCKw4jTOqMyTv6baeE5XGCfjHKClFc"  
-TELEGRAM_CHAT_ID = "-1004480322983"      
+TELEGRAM_CHAT_ID = "-1004480322983"  # یہ مین چینل الرٹس کے لیے رہے گا
 
-# --- Shared State ---
+# --- Shared State & Global Credentials ---
 shared_data = {"otp_code": None}
 current_browser_context = None
+GLOBAL_CREDS = {"username": "", "password": ""}
+user_states = {}  # ٹیلی گرام یوزرز کی اسٹیٹ ٹریک کرنے کے لیے
 
 bot_status = {
     "step": "Idle",
     "images": [],
-    "logs": [],  # <-- فرنٹ اینڈ کنسول کے لاگز یہاں سیو ہوں گے
+    "logs": [],
     "is_running": False,
     "needs_code": False,
     "proxy_status": "Direct IP"
 }
 
+# --- TRACKED TASKS JSON HELPERS ---
+def load_tracked_tasks():
+    if os.path.exists(TRACKED_TASKS_FILE):
+        try:
+            with open(TRACKED_TASKS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_tracked_tasks(data):
+    with open(TRACKED_TASKS_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
 # --- HELPER FUNCTIONS ---
 def log_msg(msg):
-    """Prints logs to terminal and sends them directly to the HTML Front-end console."""
     timestamp = datetime.datetime.now().strftime('%H:%M:%S')
     log_line = f"[{timestamp}] {msg}"
     print(log_line)
     bot_status["logs"].append(log_line)
-    if len(bot_status["logs"]) > 40:  # زیادہ سے زیادہ 40 لاگز ہسٹری میں رکھے گا
+    if len(bot_status["logs"]) > 40:
         bot_status["logs"].pop(0)
 
 def load_processed_tasks():
@@ -80,43 +99,7 @@ def kill_all_browsers():
         time.sleep(1)
     except: pass
 
-def take_screenshot(page, name):
-    try:
-        if page.is_closed(): return
-        timestamp = int(time.time())
-        filename = f"{timestamp}_{name}.png"
-        path = os.path.join(SCREENSHOT_DIR, filename)
-        page.screenshot(path=path)
-        bot_status["images"].append(filename)
-    except: pass
-
-def save_debug_html(page, step_name):
-    try:
-        if not page.is_closed():
-            content = page.content()
-            with open(DEBUG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"\n\n\n{content}")
-    except: pass
-
-def reset_debug_log():
-    try:
-        with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-            f.write("<h1>🖱️ AVISO BOT LOGS</h1>")
-    except: pass
-
-def inject_youtube_cookies(context):
-    if os.path.exists(COOKIES_FILE):
-        try:
-            with open(COOKIES_FILE, "r", encoding="utf-8") as f:
-                cookies = json.load(f)
-                context.add_cookies(cookies)
-            log_msg("🍪 YouTube Cookies Injected Successfully!")
-        except Exception as e:
-            log_msg(f"⚠️ Error loading cookies: {e}")
-    else:
-        log_msg("⚠️ youtube_cookies.json file not found.")
-
-def perform_human_mouse_click(page, selector, screenshot_name):
+def perform_human_mouse_click(page, selector):
     try:
         if page.is_closed() or not page.is_visible(selector): return False
         box = page.locator(selector).bounding_box()
@@ -132,7 +115,109 @@ def perform_human_mouse_click(page, selector, screenshot_name):
     except: pass
     return False
 
-# --- JS SCANNERS (2 RUBLES LOCK) ---
+def inject_youtube_cookies(context):
+    if os.path.exists(COOKIES_FILE):
+        try:
+            with open(COOKIES_FILE, "r", encoding="utf-8") as f:
+                cookies = json.load(f)
+                context.add_cookies(cookies)
+            log_msg("🍪 YouTube Cookies Injected Successfully!")
+        except Exception as e:
+            log_msg(f"⚠️ Error loading cookies: {e}")
+
+# --- TELEGRAM PERSONAL INBOX DISPATCHER ---
+def send_personal_telegram_alert(user_id, task_url, task_id):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    message = (
+        f"🎯 *Your Target Task is Now AVAILABLE!*\n\n"
+        f"🆔 *Task ID:* {task_id}\n"
+        f"🔗 *Task URL:* {task_url}\n\n"
+        f"🚀 Aap is task ko ab perform kar sakte hain!"
+    )
+    payload = {"chat_id": user_id, "text": message, "parse_mode": "Markdown"}
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Error sending personal alert: {e}")
+
+# --- AUTO LOGIN HELPER FOR BACKGROUND CHECKS ---
+def handle_auto_login_if_needed(page):
+    try:
+        if page.is_visible("input[name='username']") and GLOBAL_CREDS["username"]:
+            log_msg("🔐 Auto-Login triggered in background task check...")
+            page.fill("input[name='username']", GLOBAL_CREDS["username"])
+            time.sleep(0.5)
+            page.fill("input[name='password']", GLOBAL_CREDS["password"])
+            time.sleep(1)
+            
+            btn_selector = "button:has-text('Войти')"
+            if not page.is_visible(btn_selector): btn_selector = "button[type='submit']"
+            perform_human_mouse_click(page, btn_selector)
+            time.sleep(5)
+            
+            # اگر او ٹی پی آرہا ہے تو اسے اگنور کر دے گا جیسا کہ ڈسکس ہوا تھا
+            if page.is_visible("input[name='code']"):
+                log_msg("🛡️ 2FA detected during background auto-login. Skipping loop to prevent lock.")
+                return False
+            return True
+    except:
+        pass
+    return True
+
+# --- BACKGROUND 5-MINUTE CUSTOM TASK CHECKER ---
+def custom_task_checker_loop():
+    from playwright.sync_api import sync_playwright
+    log_msg("⏱️ Background Custom Task Checker Thread Started.")
+    
+    while True:
+        # ہر 5 منٹ (300 سیکنڈ) کا ویٹ لوپ
+        time.sleep(300)
+        
+        tracked_tasks = load_tracked_tasks()
+        if not tracked_tasks:
+            continue
+            
+        log_msg(f"🔄 Background Check: Scanning {len(tracked_tasks)} custom tasks...")
+        proxy_config = get_proxy_config()
+        
+        try:
+            with sync_playwright() as p:
+                # اے آئی والے لوپ کو ڈسٹرب کیے بغیر بالکل الگ براؤزر اور ٹیب اوپن کرے گا
+                context = p.chromium.launch_persistent_context(
+                    USER_DATA_DIR,
+                    headless=True,
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    proxy=proxy_config,
+                    args=["--disable-blink-features=AutomationControlled", "--disable-background-timer-throttling"]
+                )
+                
+                page = context.new_page()
+                
+                for task in tracked_tasks:
+                    try:
+                        page.goto(task["url"], timeout=45000)
+                        page.wait_for_load_state("networkidle")
+                        time.sleep(2)
+                        
+                        # چیک کریں اگر لاگ ان اڑ گیا ہے تو اٹو لاگ ان کرے گا
+                        if not handle_auto_login_if_needed(page):
+                            continue
+                            
+                        # صرف اور صرف اویلیبلٹی کی کنڈیشن میچ ہوگی (باقی سب بلاوجہ اگنور)
+                        is_available = page.is_visible("button:has-text('Приступить к выполнению')") or page.is_visible("form[action='/go/gotask.php']")
+                        
+                        if is_available:
+                            log_msg(f"✅ Target Task {task['task_id']} is available! Firing personal alert to User {task['user_id']}.")
+                            send_personal_telegram_alert(task["user_id"], task["url"], task["task_id"])
+                            
+                    except Exception as task_err:
+                        print(f"Error scanning custom task {task.get('task_id')}: {task_err}")
+                        
+                context.close()
+        except Exception as e:
+            log_msg(f"❌ Custom Task Checker Master Loop Error: {e}")
+
+# --- JS SCANNERS FOR AI POOL ---
 def get_high_value_tasks_via_js(page):
     return page.evaluate("""() => {
         const targetTasks = [];
@@ -162,7 +247,6 @@ def extract_task_page_details(page):
         const titleEl = document.querySelector('h1.title');
         if (!titleEl) return null;
         const title = titleEl.innerText.trim();
-        
         let category = 'Unknown';
         const tds = Array.from(document.querySelectorAll('td'));
         for (let td of tds) {
@@ -185,334 +269,250 @@ def extract_task_page_details(page):
         return { title: title, category: category, description: description, requirement: requirement };
     }""")
 
-# --- SILENT-AI PRO STREAMING CLIENT (UPDATED FOR LOG REASONS) ---
+# --- SILENT-AI PRO STREAMING CLIENT ---
 def analyze_with_silent_ai_stream(task_data):
     url = "https://silent-ai-pro-phi.vercel.app/api/ask"
     headers = {"Content-Type": "application/json"}
-    
-    # پرامپٹ میں رول ایڈ کر دیا ہے کہ ریجیکٹ کرنے کی وجہ لازمی بتائے
     persona = (
         "You are a silent ai made by Nothing Is Impossible.\n"
         "RULES:\n"
-        "1. CASUAL CHAT: If the user says hi/hello or talks casually, be friendly and short.\n"
-        "2. HAPPY MODE: If the user angry you send always smile emoji and happy response.\n"
-        "3. LANGUAGE STYLE: Reply ONLY in standard, clean Roman Urdu prose (Hinglish script like 'Task mukammal karen'). Do NOT use pure Arabic/Urdu alphabet text script.\n"
-        "4. CURRENCY RULES: Strictly convert any currency mention like 'py6', 'руб', 'rub', 'rubles', or 'ربل' into upper-case standard letters 'RUB' (e.g., write '3 RUB'). Never write raw letters 'py6'.\n"
-        "5. LINK INTEGRATION: When mentioning a link or a bot, output it as a clean markdown link like [Click Here](url). NEVER wrap markdown links inside extra parentheses.\n"
-        "6. TASK CRITERIA & SKIP REASON: You are analyzing a micro-task from Aviso.bz. If it requires real money deposits, purchasing accounts, investments, or bank card validation, reply EXACTLY with format 'REJECT: [Short 1-line reason in Roman Urdu explaining why, e.g., Isme investment krni hai ya card chahiye]'. If it is an easy/free task, mark it APPROVED and output a neat step-by-step user guide explaining exactly what to perform."
+        "1. LANGUAGE STYLE: Reply ONLY in standard, clean Roman Urdu prose.\n"
+        "2. CURRENCY RULES: Convert mentions to upper-case 'RUB'.\n"
+        "3. TASK CRITERIA: If requires money/purchases, reply EXACTLY with format 'REJECT: [Reason]'. If easy, mark APPROVED with a step-by-step guide."
     )
+    compiled_prompt = f"{persona}\n\nUser: Analyze this micro-task:\nTitle: {task_data['title']}\nCategory: {task_data['category']}\nDescription: {task_data['description']}\nProof: {task_data['requirement']}\n\nAI:"
     
-    compiled_prompt = (
-        f"{persona}\n\n"
-        f"User: Please analyze this micro-task:\n"
-        f"Title: {task_data['title']}\n"
-        f"Category: {task_data['category']}\n"
-        f"Description: {task_data['description']}\n"
-        f"Proof Required: {task_data['requirement']}\n\n"
-        f"AI:"
-    )
-    
-    request_body = {"key": "silent-ai", "prompt": compiled_prompt}
     raw_response = ""
     try:
-        resp = requests.post(url, json=request_body, headers=headers, stream=True, timeout=90)
-        if resp.status_code != 200: return False, "AI Server connection failed (Status Code != 200)"
-            
+        resp = requests.post(url, json={"key": "silent-ai", "prompt": compiled_prompt}, headers=headers, stream=True, timeout=90)
+        if resp.status_code != 200: return False, "AI Server connection failed"
         for line in resp.iter_lines():
             if not bot_status["is_running"]: break
             if line:
                 decoded_line = line.decode('utf-8').strip()
                 if decoded_line.startswith("data: "):
-                    json_str = decoded_line[6:]
                     try:
-                        data_chunk = json.loads(json_str)
-                        if data_chunk.get("type") == "text":
-                            raw_response += data_chunk.get("text", "")
+                        data_chunk = json.loads(decoded_line[6:])
+                        if data_chunk.get("type") == "text": raw_response += data_chunk.get("text", "")
                     except: pass
     except Exception as e:
-        return False, f"AI Stream Connection Error: {str(e)}"
+        return False, str(e)
         
     ai_reply_text = raw_response.strip()
-    if not ai_reply_text:
-        return False, "AI returned blank or empty content."
-        
-    # اگر ٹاسک ریجیکٹ ہوا ہے تو وجہ نکالیں
     if "REJECT" in ai_reply_text:
-        reason = "Task standard criteria filter (Requires investment, deposit or premium action)"
-        if "REJECT:" in ai_reply_text:
-            reason = ai_reply_text.split("REJECT:", 1)[1].strip()
-        elif ":" in ai_reply_text:
-            reason = ai_reply_text.split(":", 1)[1].strip()
+        reason = ai_reply_text.split("REJECT:", 1)[1].strip() if "REJECT:" in ai_reply_text else "Filter triggered"
         return False, reason
-        
-    ai_reply_text = ai_reply_text.replace("**", "*")
-    ai_reply_text = re.sub(r'(?m)^#{1,6}\s+(.*)$', r'*\1*', ai_reply_text)
-    ai_reply_text = re.sub(r'\(\s*\[([^\]]+)\]\(([^)]+)\)\s*\)', r'[\1](\2)', ai_reply_text)
-    ai_reply_text = re.sub(r'(?i)py6|руб|руб\.|rubles\b|rub\b|ربل', 'RUB', ai_reply_text)
-    
     return True, ai_reply_text
 
-# --- TELEGRAM DELIVERY TRANSMITTER ---
 def fire_alert_to_telegram(task_url, price, ai_content):
-    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or TELEGRAM_CHAT_ID == "YOUR_CHAT_ID_HERE":
-        log_msg("⚠️ Telegram configurations missing. Skipping broadcast.")
-        return False
     telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    formatted_msg = (
-        f"🎯 *New Easy Task Identified!*\n"
-        f"💰 *Payout Value:* {price} RUB\n"
-        f"🔗 *Task URL:* [Open Task Dashboard]({task_url})\n\n"
-        f"{ai_content}"
-    )
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": formatted_msg, "parse_mode": "Markdown", "disable_web_page_preview": True}
-    try:
-        requests.post(telegram_url, json=payload, timeout=12)
-        return True
-    except: return False
+    formatted_msg = f"🎯 *New Easy Task Identified!*\n💰 *Payout Value:* {price} RUB\n🔗 *Task URL:* [Open Task]({task_url})\n\n{ai_content}"
+    try: requests.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": formatted_msg, "parse_mode": "Markdown", "disable_web_page_preview": True}, timeout=12)
+    except: pass
 
-# --- TASK SCHEDULER CORE RUNNER (DYNAMIC RETRY SCROLL SYSTEM WITH FRONT-END LOGS) ---
+# --- CORE AI SCRAPER RUNNER (WITH 10-SECOND THROTTLING) ---
 def process_high_value_scrapes(context, page):
     log_msg("🔍 Navigating to Aviso Task Pool Dashboard...")
-    bot_status["step"] = "🔍 Reading Task List Page..."
     page.goto("https://aviso.bz/tasks")
     page.wait_for_load_state("networkidle")
     time.sleep(2)
     
-    if page.is_visible("input[name='username']"):
-        log_msg("⚠️ Session expired or not logged in! Exiting scrape cycle.")
-        return
-    
     processed_history = load_processed_tasks()
-    log_msg(f"📋 Loaded {len(processed_history)} already processed tasks from history file.")
     
     while bot_status["is_running"]:
-        bot_status["step"] = "⚙️ Scanning current viewport tasks..."
         eligible_tasks = get_high_value_tasks_via_js(page) or []
         unique_tasks = [t for t in eligible_tasks if t['id'] not in processed_history]
         
-        # اگر کوئی نیا ٹاسک لسٹ میں نظر نہیں آ رہا، تو جب تک نیا ٹاسک نہ ملے اسکرول لوپ چلائیں
         if not unique_tasks:
-            log_msg("📜 No new tasks found in current viewport. Starting smart scroll retry loop...")
-            consecutive_scrolls = 0
-            max_scroll_limit = 25  
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+            continue
             
-            while not unique_tasks and consecutive_scrolls < max_scroll_limit and bot_status["is_running"]:
-                consecutive_scrolls += 1
-                bot_status["step"] = f"📜 Searching new tasks... Scroll attempt {consecutive_scrolls}"
-                log_msg(f"Moving page down/up to trigger dynamic AJAX load (Attempt {consecutive_scrolls})...")
-                
-                try:
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(1.5)
-                    page.evaluate("window.scrollBy(0, -350);")  # آٹو لوڈنگ ایکٹیویٹ کرنے کی ٹرک
-                    time.sleep(0.6)
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(1.5)
-                except Exception as e:
-                    log_msg(f"❌ Scroll action execution failed: {e}")
-                    break
-                
-                eligible_tasks = get_high_value_tasks_via_js(page) or []
-                unique_tasks = [t for t in eligible_tasks if t['id'] not in processed_history]
-            
-            if not unique_tasks:
-                log_msg("🏁 Active scroll limit reached. No more unique tasks generated dynamically by website.")
-                bot_status["step"] = "⚠️ Reached end of available pool."
-                break
-        
-        log_msg(f"🎯 Scroll loop stopped. Found {len(unique_tasks)} new unique tasks to process.")
-        
-        for iteration, task in enumerate(unique_tasks, 1):
+        for task in unique_tasks:
             if not bot_status["is_running"]: break
-            
-            log_msg(f"🚀 Processing Task {iteration}/{len(unique_tasks)} (ID: {task['id']} | Price: {task['price']} RUB)")
-            bot_status["step"] = f"🚀 Opening Task ID: {task['id']} in a New Tab..."
+            log_msg(f"🚀 Processing Task ID: {task['id']} ({task['price']} RUB)")
             
             try:
                 task_page = context.new_page()
                 task_page.goto(task['url'], timeout=45000)
                 task_page.wait_for_load_state("networkidle")
-                time.sleep(1.5)
                 
                 scraped_payload = extract_task_page_details(task_page)
-                task_page.close()  # ڈیٹا نکال کر فوراً کلوز، مین پیج کی پوزیشن سیو رہے گی
+                task_page.close()
                 
-                if not scraped_payload or not scraped_payload['title']:
-                    log_msg(f"❌ Task {task['id']} Skipped! Reason: Task is suspended, removed or invalid page structure.")
-                    save_processed_task(task['id'])
-                    processed_history.add(task['id'])
-                    continue
-                
-                bot_status["step"] = f"🧠 Analyzing Task {task['id']} with Silent-AI..."
-                is_approved, ai_result = analyze_with_silent_ai_stream(scraped_payload)
-                
-                if is_approved:
-                    log_msg(f"✅ Task {task['id']} APPROVED by AI! Dispatching alert to Telegram channel...")
-                    bot_status["step"] = f"📢 Firing Task {task['id']} to Telegram..."
-                    fire_alert_to_telegram(task['url'], task['price'], ai_result)
-                else:
-                    # فرنٹ اینڈ کنسول پر واضح اسکیپ کی وجہ پرنٹ ہوگی
-                    log_msg(f"⚠️ Task {task['id']} SKIPPED! Reason: {ai_result}")
-                    
+                if scraped_payload and scraped_payload['title']:
+                    is_approved, ai_result = analyze_with_silent_ai_stream(scraped_payload)
+                    if is_approved:
+                        fire_alert_to_telegram(task['url'], task['price'], ai_result)
+                        log_msg(f"✅ Task {task['id']} Dispached to Telegram.")
+                    else:
+                        log_msg(f"⚠️ Task {task['id']} Skipped: {ai_result}")
+                        
                 save_processed_task(task['id'])
                 processed_history.add(task['id'])
-                time.sleep(1)
                 
-            except Exception as err:
-                log_msg(f"❌ Error handling task {task['id']} execution inside tab: {err}")
-                try: task_page.close()
-                except: pass
+                # 🎯 ریٹ لمیٹ اور فائرنگ سے بچنے کے لیے ہر ایک ٹاسک کے بعد کم از کم 10 سیکنڈ کا لازمی تھروٹل توقف
+                log_msg("⏳ Sleeping for 10 seconds to respect AI rate limits...")
+                time.sleep(10)
+                
+            except Exception as e:
                 save_processed_task(task['id'])
                 processed_history.add(task['id'])
-                continue
-                
-    log_msg("🏁 Scrape run cycle completed successfully. Going to standby phase.")
+                time.sleep(5)
 
-# --- MAIN RUNNER LOOP ---
 def run_infinite_loop(username, password):
-    global bot_status, shared_data, current_browser_context
+    global bot_status, current_browser_context
     from playwright.sync_api import sync_playwright
 
     kill_all_browsers()
-    reset_debug_log()
     bot_status["is_running"] = True
-    bot_status["needs_code"] = False
     bot_status["logs"] = []
-    shared_data["otp_code"] = None
     
-    log_msg("🚀 System Initialized. Launching browser instances...")
     proxy_config = get_proxy_config()
-    if proxy_config:
-        log_msg(f"🌍 Running via Proxy Connection: {proxy_config['server']}")
-        bot_status["proxy_status"] = f"Proxy: {proxy_config['server']}"
-    else:
-        log_msg("🌍 Running via Direct IP Network (No proxy).")
-        bot_status["proxy_status"] = "Direct IP"
-
     with sync_playwright() as p:
         while bot_status["is_running"]:
             try:
                 context = p.chromium.launch_persistent_context(
-                    USER_DATA_DIR,
-                    headless=True,
+                    USER_DATA_DIR, headless=True,
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    viewport={"width": 1366, "height": 768},
-                    device_scale_factor=1,
-                    is_mobile=False, has_touch=False, proxy=proxy_config,
-                    args=["--disable-blink-features=AutomationControlled", "--disable-background-timer-throttling", "--start-maximized"]
+                    proxy=proxy_config, args=["--disable-blink-features=AutomationControlled", "--disable-background-timer-throttling"]
                 )
-                
                 inject_youtube_cookies(context)
                 current_browser_context = context
                 page = context.new_page()
                 
-                bot_status["step"] = "Login Page..."
-                log_msg("Checking Aviso authentication status...")
                 page.goto("https://aviso.bz/login", timeout=60000)
-                save_debug_html(page, "Login_Page")
-                
                 if page.is_visible("input[name='username']"):
-                    log_msg("🔑 Standard login form detected. Typing profile credentials...")
-                    page.click("input[name='username']")
-                    page.type("input[name='username']", username, delay=80)
-                    time.sleep(0.5)
-                    page.click("input[name='password']")
-                    page.type("input[name='password']", password, delay=80)
-                    time.sleep(1)
-
-                    bot_status["step"] = "Clicking Login..."
+                    page.fill("input[name='username']", username)
+                    page.fill("input[name='password']", password)
                     btn_selector = "button:has-text('Войти')"
                     if not page.is_visible(btn_selector): btn_selector = "button[type='submit']"
-                    perform_human_mouse_click(page, btn_selector, "Login_Mouse_Click")
-                    
+                    perform_human_mouse_click(page, btn_selector)
                     time.sleep(5)
-                    take_screenshot(page, "After_Login_Click")
-
-                    if page.is_visible("input[name='username']"):
-                        if "подождите" not in page.content().lower():
-                            log_msg("⚠️ Mouse click fallback triggered. Force-submitting form structure...")
-                            bot_status["step"] = "Force Submitting..."
-                            page.evaluate("""() => {
-                                const form = document.querySelector('form[action*="login"]') || document.querySelector('form');
-                                if(form) { form.submit(); } 
-                            }""")
-                            page.keyboard.press("Enter")
-                            time.sleep(8)
 
                     if page.is_visible("input[name='code']"):
-                        log_msg("🛡️ 2-Factor Authentication OTP Guard triggered! Waiting for code...")
-                        bot_status["step"] = "WAITING_FOR_CODE"
                         bot_status["needs_code"] = True
-                        take_screenshot(page, "OTP_Needed")
-                        while shared_data["otp_code"] is None:
-                            time.sleep(1)
-                            if not bot_status["is_running"]: break
-                        
+                        while shared_data["otp_code"] is None and bot_status["is_running"]: time.sleep(1)
                         if shared_data["otp_code"]:
-                            log_msg(f"📥 Injecting 2FA Code: {shared_data['otp_code']}")
                             page.fill("input[name='code']", shared_data["otp_code"])
-                            page.press("input[name='code']", "Enter")
-                            time.sleep(8)
-                            bot_status["needs_code"] = False
-                            shared_data["otp_code"] = None
-
-                    if page.is_visible("input[name='username']"):
-                        log_msg("❌ Authentication sequence failed completely. Retrying...")
-                        bot_status["step"] = "Login Failed. Retrying..."
-                        save_debug_html(page, "Login_Failed")
-                        context.close()
-                        continue
+                            page.keyboard.press("Enter")
+                            time.sleep(6)
+                        bot_status["needs_code"] = False
+                        shared_data["otp_code"] = None
                 
-                log_msg("🟢 Authorization Verified successfully!")
-                bot_status["step"] = "🟢 Login Success!"
-                take_screenshot(page, "Login_Success")
-
-                # ٹاسک پراسیسنگ کا ایڈوانسڈ لاگنگ ماڈیول رن کریں
                 process_high_value_scrapes(context, page)
-                
-                log_msg("🔒 Cycle finished. Executing safe logout protocol...")
-                try:
-                    page.goto("https://aviso.bz/logout")
-                    time.sleep(5)
-                except: pass
-                
                 context.close()
-                log_msg("💤 Session resting. Entering a 20-minute sleep cycle...")
-                for s in range(1200):
-                    if not bot_status["is_running"]: return
-                    if s % 10 == 0: 
-                        rem = 1200 - s
-                        bot_status["step"] = f"💤 Next Run: {rem // 60}m {rem % 60}s"
-                    time.sleep(1)
-
             except Exception as e:
-                log_msg(f"❌ Internal Processing Loop Exception: {str(e)}")
-                bot_status["step"] = f"Error: {str(e)}"
-                time.sleep(30)
+                log_msg(f"❌ Scraper loop exception: {e}")
+                time.sleep(20)
 
-# --- ROUTES ---
+# --- TELEGRAM INTERACTIVE BOT INTEGRATION (python-telegram-bot v21+) ---
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("➕ Add Task", callback_data="add_task")],
+        [InlineKeyboardButton("⚙️ Manage Tasks", callback_data="manage_tasks")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("✨ *Welcome to Target Task Monitor Bot!*\n\nNiche diye gaye buttons se apna task manage karen:", parse_mode="Markdown", reply_markup=reply_markup)
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = str(query.from_user.id)
+    
+    if query.data == "add_task":
+        user_states[user_id] = "waiting_for_link"
+        await query.message.reply_text("🔗 Kindly pane task ka *Full URL Link* send karen:\nExample: `https://aviso.bz/task-read?adv=1373852`", parse_mode="Markdown")
+        
+    elif query.data == "manage_tasks":
+        tasks = load_tracked_tasks()
+        user_tasks = [t for t in tasks if str(t["user_id"]) == user_id]
+        
+        if not user_tasks:
+            await query.message.reply_text("❌ Aapki list mein koi active task nahi hai.")
+            return
+            
+        keyboard = []
+        for t in user_tasks:
+            keyboard.append([InlineKeyboardButton(f"🗑️ Delete ID: {t['task_id']}", callback_data=f"del_{t['task_id']}")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("⚙️ *Your Tracked Tasks:*\nKisi bhi task par click karke usko delete karen.", parse_mode="Markdown", reply_markup=reply_markup)
+        
+    elif query.data.startswith("del_"):
+        task_id_to_del = query.data.split("_")[1]
+        tasks = load_tracked_tasks()
+        updated_tasks = [t for t in tasks if not (str(t["user_id"]) == user_id and str(t["task_id"]) == task_id_to_del)]
+        save_tracked_tasks(updated_tasks)
+        await query.message.reply_text(f"✅ Task ID *{task_id_to_del}* successfully remove kar diya gaya hai!", parse_mode="Markdown")
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    text = update.message.text.strip()
+    
+    if user_states.get(user_id) == "waiting_for_link":
+        # یو آر ایل سے یونیک ایڈورٹائزمنٹ / ٹاسک آئی ڈی نکالنا
+        match = re.search(r'adv=(\d+)', text)
+        if not match:
+            await update.message.reply_text("❌ Invalid Link! Please enter a valid Aviso task link containing 'adv=ID'.")
+            return
+            
+        task_id = match.group(1)
+        tasks = load_tracked_tasks()
+        
+        # ڈوپلیکیٹ چیک کرنا
+        if any(t["task_id"] == task_id and str(t["user_id"]) == user_id for t in tasks):
+            await update.message.reply_text("⚠️ Yeh task pehle se aapki list mein added hai.")
+            user_states[user_id] = None
+            return
+            
+        tasks.append({
+            "user_id": user_id,
+            "task_id": task_id,
+            "url": text,
+            "added_at": str(datetime.datetime.now())
+        })
+        
+        save_tracked_tasks(tasks)
+        user_states[user_id] = None
+        await update.message.reply_text(f"🎯 *Success!* Task ID *{task_id}* target list mein add ho gaya hai. Har 5 min baad iski checking ki jayegi.", parse_mode="Markdown")
+
+def start_telegram_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    
+    print("🤖 Telegram Bot Thread Engine Initialized.")
+    application.run_polling(close_loop=False)
+
+# --- FLASK ROUTES ---
 @app.route('/')
 def index(): return render_template('index.html')
 
-@app.route('/view_image/<filename>')
-def view_image(filename):
-    file_path = os.path.join(SCREENSHOT_DIR, filename)
-    if os.path.exists(file_path):
-        response = make_response(send_file(file_path, mimetype='image/jpeg'))
-        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        return response
-    return "Not Found", 404
-
-@app.route('/save_proxy', methods=['POST'])
-def save_proxy():
+@app.route('/start', methods=['POST'])
+def start_bot():
+    if bot_status["is_running"]: return jsonify({"status": "Running"})
     data = request.json
-    with open(PROXY_FILE, "w") as f: f.write(data.get('proxy', '').strip())
-    return jsonify({"status": "Proxy Saved!"})
+    username = data.get('username', '')
+    password = data.get('password', '')
+    GLOBAL_CREDS["username"] = username
+    GLOBAL_CREDS["password"] = password
+    
+    t = threading.Thread(target=run_infinite_loop, args=(username, password))
+    t.start()
+    return jsonify({"status": "Started"})
 
-@app.route('/clear_proxy', methods=['POST'])
-def clear_proxy():
-    if os.path.exists(PROXY_FILE): os.remove(PROXY_FILE)
-    return jsonify({"status": "Proxy Cleared!"})
+@app.route('/stop', methods=['POST'])
+def stop_bot():
+    bot_status["is_running"] = False
+    return jsonify({"status": "Stopping..."})
+
+@app.route('/status')
+def status(): return jsonify(bot_status)
 
 @app.route('/submit_code', methods=['POST'])
 def submit_code_api():
@@ -520,42 +520,15 @@ def submit_code_api():
     shared_data["otp_code"] = data.get('code')
     return jsonify({"status": "Received"})
 
-@app.route('/start', methods=['POST'])
-def start_bot():
-    if bot_status["is_running"]: return jsonify({"status": "Running"})
-    data = request.json
-    t = threading.Thread(target=run_infinite_loop, args=(data.get('username'), data.get('password')))
-    t.start()
-    return jsonify({"status": "Started"})
-
-@app.route('/stop', methods=['POST'])
-def stop_bot():
-    bot_status["is_running"] = False
-    log_msg("🛑 Stop signal received. Suspending operation updates...")
-    return jsonify({"status": "Stopping..."})
-
-@app.route('/clear_data', methods=['POST'])
-def clear_data_route():
-    global current_browser_context
-    try:
-        bot_status["is_running"] = False
-        if current_browser_context:
-            try: current_browser_context.close()
-            except: pass
-            current_browser_context = None
-        time.sleep(3)
-        if os.path.exists(USER_DATA_DIR): shutil.rmtree(USER_DATA_DIR); os.makedirs(USER_DATA_DIR, exist_ok=True)
-        return jsonify({"status": "Data Wiped"})
-    except: return jsonify({"status": "Error"})
-
-@app.route('/status')
-def status(): return jsonify(bot_status)
-
-@app.route('/download_log')
-def download_log():
-    if os.path.exists(DEBUG_FILE): return send_file(DEBUG_FILE, as_attachment=True)
-    else: return "Log not found", 404
-
 if __name__ == '__main__':
+    # 1. ٹیلی گرام انٹرایکٹو بوٹ کو الگ تھریڈ میں رن کریں
+    bot_thread = threading.Thread(target=start_telegram_bot, daemon=True)
+    bot_thread.start()
+    
+    # 2. 5 منٹ والے کسٹم ٹاسک مانیٹرنگ لوپ کو الگ آزاد تھریڈ میں رن کریں
+    custom_checker_thread = threading.Thread(target=custom_task_checker_loop, daemon=True)
+    custom_checker_thread.start()
+    
+    # 3. مین ویب سرور رن کریں
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
