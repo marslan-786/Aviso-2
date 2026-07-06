@@ -1,3 +1,6 @@
 flask
 playwright
 requests
+python-telegram-bot
+python-dotenv
+Werkzeug
