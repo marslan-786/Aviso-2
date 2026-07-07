@@ -352,8 +352,8 @@ def process_high_value_scrapes(context, page):
                 processed_history.add(task['id'])
                 
                 # 🎯 ریٹ لمیٹ اور فائرنگ سے بچنے کے لیے ہر ایک ٹاسک کے بعد کم از کم 10 سیکنڈ کا لازمی تھروٹل توقف
-                log_msg("⏳ Sleeping for 10 seconds to respect AI rate limits...")
-                time.sleep(10)
+                log_msg("⏳ Sleeping for 60 seconds to respect AI rate limits...")
+                time.sleep(60)
                 
             except Exception as e:
                 save_processed_task(task['id'])
