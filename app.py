@@ -27,13 +27,13 @@ TRACKED_TASKS_FILE = "tracked_tasks.json"
 
 # --- Telegram Configuration ---
 TELEGRAM_BOT_TOKEN = "7766363398:AAFEfLCKw4jTOqMyTv6baeE5XGCfjHKClFc"  
-TELEGRAM_CHAT_ID = "-1004480322983"  # یہ مین چینل الرٹس کے لیے رہے گا
+TELEGRAM_CHAT_ID = "-1004480322983"  
 
 # --- Shared State & Global Credentials ---
 shared_data = {"otp_code": None}
 current_browser_context = None
 GLOBAL_CREDS = {"username": "", "password": ""}
-user_states = {}  # ٹیلی گرام یوزرز کی اسٹیٹ ٹریک کرنے کے لیے
+user_states = {}  
 
 bot_status = {
     "step": "Idle",
@@ -155,7 +155,6 @@ def handle_auto_login_if_needed(page):
             perform_human_mouse_click(page, btn_selector)
             time.sleep(5)
             
-            # اگر او ٹی پی آرہا ہے تو اسے اگنور کر دے گا جیسا کہ ڈسکس ہوا تھا
             if page.is_visible("input[name='code']"):
                 log_msg("🛡️ 2FA detected during background auto-login. Skipping loop to prevent lock.")
                 return False
@@ -170,7 +169,6 @@ def custom_task_checker_loop():
     log_msg("⏱️ Background Custom Task Checker Thread Started.")
     
     while True:
-        # ہر 5 منٹ (300 سیکنڈ) کا ویٹ لوپ
         time.sleep(300)
         
         tracked_tasks = load_tracked_tasks()
@@ -182,7 +180,6 @@ def custom_task_checker_loop():
         
         try:
             with sync_playwright() as p:
-                # اے آئی والے لوپ کو ڈسٹرب کیے بغیر بالکل الگ براؤزر اور ٹیب اوپن کرے گا
                 context = p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
@@ -199,11 +196,9 @@ def custom_task_checker_loop():
                         page.wait_for_load_state("networkidle")
                         time.sleep(2)
                         
-                        # چیک کریں اگر لاگ ان اڑ گیا ہے تو اٹو لاگ ان کرے گا
                         if not handle_auto_login_if_needed(page):
                             continue
                             
-                        # صرف اور صرف اویلیبلٹی کی کنڈیشن میچ ہوگی (باقی سب بلاوجہ اگنور)
                         is_available = page.is_visible("button:has-text('Приступить к выполнению')") or page.is_visible("form[action='/go/gotask.php']")
                         
                         if is_available:
@@ -235,7 +230,8 @@ def get_high_value_tasks_via_js(page):
                 const cleanPrice = priceText.match(/([\d\.,]+)\s*руб/);
                 if (cleanPrice) { price = parseFloat(cleanPrice[1].replace(',', '.')); }
             }
-            if (taskId && price >= 2.0) {
+            // 🎯 اب 1.0 ربل یا اس سے اوپر والے تمام آسان ٹاسکس ایکسیپٹ ہوں گے
+            if (taskId && price >= 1.0) {
                 targetTasks.push({ id: taskId, price: price, url: 'https://aviso.bz' + href });
             }
         });
@@ -273,12 +269,16 @@ def extract_task_page_details(page):
 def analyze_with_silent_ai_stream(task_data):
     url = "https://silent-ai-pro-phi.vercel.app/api/ask"
     headers = {"Content-Type": "application/json"}
+    
+    # 🎯 یہاں پرامپٹ کو بالکل آسان ٹاسکس کے فلٹر کے لیے سیٹ کر دیا ہے
     persona = (
         "You are a silent ai made by Nothing Is Impossible.\n"
         "RULES:\n"
         "1. LANGUAGE STYLE: Reply ONLY in standard, clean Roman Urdu prose.\n"
         "2. CURRENCY RULES: Convert mentions to upper-case 'RUB'.\n"
-        "3. TASK CRITERIA: If requires money/purchases, reply EXACTLY with format 'REJECT: [Reason]'. If easy, mark APPROVED with a step-by-step guide."
+        "3. TASK CRITERIA: Approve ONLY simple and easy micro-tasks. This includes: Yandex tasks, Telegram channel subscriptions/joins, GitHub stars, visiting websites, surfing, clicking links, or very simple mobile app installations. Payouts around 1 RUB or higher are perfectly fine.\n"
+        "CRITICAL REJECTION RULE: If a task requires any financial investment, bank cards, identity checks (KYC), writing long reviews/articles, or complex multiple-page registrations, reply EXACTLY with format 'REJECT: [Reason in Roman Urdu]'.\n"
+        "If the task is easy, mark APPROVED and provide a very clean step-by-step execution guide in Roman Urdu."
     )
     compiled_prompt = f"{persona}\n\nUser: Analyze this micro-task:\nTitle: {task_data['title']}\nCategory: {task_data['category']}\nDescription: {task_data['description']}\nProof: {task_data['requirement']}\n\nAI:"
     
@@ -310,7 +310,7 @@ def fire_alert_to_telegram(task_url, price, ai_content):
     try: requests.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": formatted_msg, "parse_mode": "Markdown", "disable_web_page_preview": True}, timeout=12)
     except: pass
 
-# --- CORE AI SCRAPER RUNNER (WITH 10-SECOND THROTTLING) ---
+# --- CORE AI SCRAPER RUNNER (WITH AUTOMATIC PAGINATION & SCROLL) ---
 def process_high_value_scrapes(context, page):
     log_msg("🔍 Navigating to Aviso Task Pool Dashboard...")
     page.goto("https://aviso.bz/tasks")
@@ -318,16 +318,42 @@ def process_high_value_scrapes(context, page):
     time.sleep(2)
     
     processed_history = load_processed_tasks()
+    scroll_attempts = 0
     
     while bot_status["is_running"]:
         eligible_tasks = get_high_value_tasks_via_js(page) or []
         unique_tasks = [t for t in eligible_tasks if t['id'] not in processed_history]
         
+        # 🎯 اگر کرنٹ ویو پر کوئی نیا ٹاسک نہیں ملا
         if not unique_tasks:
+            scroll_attempts += 1
+            log_msg(f"⏳ No new tasks on current screen. Scrolling down... (Attempt {scroll_attempts}/5)")
             page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
+            time.sleep(3)
+            
+            # اگر 5 بار اسکرول کرنے پر بھی کچھ نہ ملے، تو نیکسٹ پیج پر کلک کرے گا یا ریفریش کرے گا
+            if scroll_attempts >= 5:
+                log_msg("🔄 Target limit reached on this view. Trying to navigate to next page or refreshing...")
+                try:
+                    # یہ کلاسیک نیکسٹ بٹن یا الیلیمنٹ کو تلاش کرے گا
+                    next_btn = page.locator("a.page-link:has-text('»'), a:has-text('Дальше'), .pagination a").last
+                    if next_btn.is_visible():
+                        next_btn.click()
+                        log_msg("➡️ Successfully clicked Next Page button.")
+                        page.wait_for_load_state("networkidle")
+                    else:
+                        page.goto("https://aviso.bz/tasks")
+                        log_msg("🔄 No Next button visible. Reloaded main pool URL.")
+                except Exception as pagination_err:
+                    log_msg(f"⚠️ Pagination trigger failed, enforcing reload: {pagination_err}")
+                    page.goto("https://aviso.bz/tasks")
+                
+                scroll_attempts = 0
             continue
             
+        # اگر ٹاسک مل گئے تو اسکرول کاؤنٹر ری سیٹ
+        scroll_attempts = 0
+        
         for task in unique_tasks:
             if not bot_status["is_running"]: break
             log_msg(f"🚀 Processing Task ID: {task['id']} ({task['price']} RUB)")
@@ -351,9 +377,9 @@ def process_high_value_scrapes(context, page):
                 save_processed_task(task['id'])
                 processed_history.add(task['id'])
                 
-                # 🎯 ریٹ لمیٹ اور فائرنگ سے بچنے کے لیے ہر ایک ٹاسک کے بعد کم از کم 10 سیکنڈ کا لازمی تھروٹل توقف
-                log_msg("⏳ Sleeping for 60 seconds to respect AI rate limits...")
-                time.sleep(60)
+                # AI ریٹ لمیٹ کی وجہ سے یہاں توقف لازمی ہے تاکہ رن ٹائم بلاک نہ ہو
+                log_msg("⏳ Sleeping for 45 seconds to respect AI rate limits...")
+                time.sleep(45)
                 
             except Exception as e:
                 save_processed_task(task['id'])
@@ -406,7 +432,7 @@ def run_infinite_loop(username, password):
                 log_msg(f"❌ Scraper loop exception: {e}")
                 time.sleep(20)
 
-# --- TELEGRAM INTERACTIVE BOT INTEGRATION (python-telegram-bot v21+) ---
+# --- TELEGRAM INTERACTIVE BOT INTEGRATION ---
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("➕ Add Task", callback_data="add_task")],
@@ -451,7 +477,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
     if user_states.get(user_id) == "waiting_for_link":
-        # یو آر ایل سے یونیک ایڈورٹائزمنٹ / ٹاسک آئی ڈی نکالنا
         match = re.search(r'adv=(\d+)', text)
         if not match:
             await update.message.reply_text("❌ Invalid Link! Please enter a valid Aviso task link containing 'adv=ID'.")
@@ -460,7 +485,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = match.group(1)
         tasks = load_tracked_tasks()
         
-        # ڈوپلیکیٹ چیک کرنا
         if any(t["task_id"] == task_id and str(t["user_id"]) == user_id for t in tasks):
             await update.message.reply_text("⚠️ Yeh task pehle se aapki list mein added hai.")
             user_states[user_id] = None
@@ -522,14 +546,11 @@ def submit_code_api():
     return jsonify({"status": "Received"})
 
 if __name__ == '__main__':
-    # 1. ٹیلی گرام انٹرایکٹو بوٹ کو الگ تھریڈ میں رن کریں
     bot_thread = threading.Thread(target=start_telegram_bot, daemon=True)
     bot_thread.start()
     
-    # 2. 5 منٹ والے کسٹم ٹاسک مانیٹرنگ لوپ کو الگ آزاد تھریڈ میں رن کریں
     custom_checker_thread = threading.Thread(target=custom_task_checker_loop, daemon=True)
     custom_checker_thread.start()
     
-    # 3. مین ویب سرور رن کریں
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
