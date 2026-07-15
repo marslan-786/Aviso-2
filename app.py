@@ -230,7 +230,6 @@ def get_high_value_tasks_via_js(page):
                 const cleanPrice = priceText.match(/([\d\.,]+)\s*руб/);
                 if (cleanPrice) { price = parseFloat(cleanPrice[1].replace(',', '.')); }
             }
-            // 🎯 اب 1.0 ربل یا اس سے اوپر والے تمام آسان ٹاسکس ایکسیپٹ ہوں گے
             if (taskId && price >= 1.0) {
                 targetTasks.push({ id: taskId, price: price, url: 'https://aviso.bz' + href });
             }
@@ -265,27 +264,48 @@ def extract_task_page_details(page):
         return { title: title, category: category, description: description, requirement: requirement };
     }""")
 
-# --- SILENT-AI PRO STREAMING CLIENT ---
-def analyze_with_silent_ai_stream(task_data):
+# --- SILENT-AI BATCH PRO STREAMING CLIENT ---
+def analyze_batch_with_silent_ai_stream(batch_tasks):
     url = "https://silent-ai-pro-phi.vercel.app/api/ask"
     headers = {"Content-Type": "application/json"}
     
-    # 🎯 یہاں پرامپٹ کو بالکل آسان ٹاسکس کے فلٹر کے لیے سیٹ کر دیا ہے
     persona = (
         "You are a silent ai made by Nothing Is Impossible.\n"
         "RULES:\n"
         "1. LANGUAGE STYLE: Reply ONLY in standard, clean Roman Urdu prose.\n"
         "2. CURRENCY RULES: Convert mentions to upper-case 'RUB'.\n"
-        "3. TASK CRITERIA: Approve ONLY simple and easy micro-tasks. This includes: Yandex tasks, Telegram channel subscriptions/joins, GitHub stars, visiting websites, surfing, clicking links, or very simple mobile app installations. Payouts around 1 RUB or higher are perfectly fine.\n"
-        "CRITICAL REJECTION RULE: If a task requires any financial investment, bank cards, identity checks (KYC), writing long reviews/articles, or complex multiple-page registrations, reply EXACTLY with format 'REJECT: [Reason in Roman Urdu]'.\n"
-        "If the task is easy, mark APPROVED and provide a very clean step-by-step execution guide in Roman Urdu."
+        "3. TASK CRITERIA: Approve ONLY simple and easy micro-tasks. This includes: Yandex tasks, Telegram channel subscriptions/joins, GitHub, visiting websites, surfing, clicking links, make account and only easy task. Payouts around 1 RUB or higher are perfectly fine.\n"
+        "CRITICAL REJECTION RULE: If a task requires any financial investment, bank cards, identity checks (KYC), writing long reviews/articles, or complex multiple-page registrations, mark it as REJECTED.\n\n"
+        "OUTPUT FORMAT:\n"
+        "You MUST process all tasks provided below and format the output EXACTLY like this for each single task. Do not wrap it in markdown or add extra chat conversational text outside these blocks:\n\n"
+        "=== TASK: [Insert Task ID] ===\n"
+        "STATUS: [APPROVED or REJECTED]\n"
+        "REASON_OR_GUIDE: [If REJECTED, reason in Roman Urdu. If APPROVED, a very clean step-by-step execution guide in Roman Urdu]\n"
+        "=== END ==="
     )
-    compiled_prompt = f"{persona}\n\nUser: Analyze this micro-task:\nTitle: {task_data['title']}\nCategory: {task_data['category']}\nDescription: {task_data['description']}\nProof: {task_data['requirement']}\n\nAI:"
+    
+    # 10 tasks ka bulk content build karna
+    compiled_tasks = ""
+    for task in batch_tasks:
+        compiled_tasks += (
+            f"\n--- TASK START ---\n"
+            f"ID: {task['id']}\n"
+            f"Title: {task['title']}\n"
+            f"Category: {task['category']}\n"
+            f"Description: {task['description']}\n"
+            f"Proof: {task['requirement']}\n"
+            f"--- TASK END ---\n"
+        )
+        
+    compiled_prompt = f"{persona}\n\nUser: Analyze these micro-tasks:\n{compiled_tasks}\n\nAI:"
     
     raw_response = ""
     try:
-        resp = requests.post(url, json={"key": "silent-ai", "prompt": compiled_prompt}, headers=headers, stream=True, timeout=90)
-        if resp.status_code != 200: return False, "AI Server connection failed"
+        resp = requests.post(url, json={"key": "silent-ai", "prompt": compiled_prompt}, headers=headers, stream=True, timeout=120)
+        if resp.status_code != 200: 
+            log_msg("❌ AI Server connection failed for batch request.")
+            return {}
+            
         for line in resp.iter_lines():
             if not bot_status["is_running"]: break
             if line:
@@ -293,16 +313,35 @@ def analyze_with_silent_ai_stream(task_data):
                 if decoded_line.startswith("data: "):
                     try:
                         data_chunk = json.loads(decoded_line[6:])
-                        if data_chunk.get("type") == "text": raw_response += data_chunk.get("text", "")
+                        if data_chunk.get("type") == "text": 
+                            raw_response += data_chunk.get("text", "")
                     except: pass
     except Exception as e:
-        return False, str(e)
+        log_msg(f"⚠️ Error during batch AI stream: {e}")
+        return {}
         
-    ai_reply_text = raw_response.strip()
-    if "REJECT" in ai_reply_text:
-        reason = ai_reply_text.split("REJECT:", 1)[1].strip() if "REJECT:" in ai_reply_text else "Filter triggered"
-        return False, reason
-    return True, ai_reply_text
+    # Response blocks ko systematically parse karna
+    blocks = re.split(r"===\s*TASK:\s*", raw_response, flags=re.IGNORECASE)
+    parsed_results = {}
+    
+    for block in blocks:
+        if not block.strip(): continue
+        lines = block.split("\n")
+        id_match = re.match(r"^(\d+)", lines[0].strip())
+        if not id_match: continue
+        task_id = id_match.group(1)
+        
+        full_block_text = "\n".join(lines[1:])
+        status_match = re.search(r"STATUS:\s*(APPROVED|REJECTED)", full_block_text, re.IGNORECASE)
+        status = status_match.group(1).upper() if status_match else "REJECTED"
+        
+        guide_match = re.search(r"REASON_OR_GUIDE:\s*(.*)", full_block_text, re.DOTALL | re.IGNORECASE)
+        guide_content = guide_match.group(1).strip() if guide_match else ""
+        guide_content = re.sub(r"===\s*END\s*===", "", guide_content, flags=re.IGNORECASE).strip()
+        
+        parsed_results[task_id] = {"status": status, "content": guide_content}
+        
+    return parsed_results
 
 def fire_alert_to_telegram(task_url, price, ai_content):
     telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -310,7 +349,7 @@ def fire_alert_to_telegram(task_url, price, ai_content):
     try: requests.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": formatted_msg, "parse_mode": "Markdown", "disable_web_page_preview": True}, timeout=12)
     except: pass
 
-# --- CORE AI SCRAPER RUNNER (WITH AUTOMATIC PAGINATION & SCROLL) ---
+# --- CORE AI SCRAPER RUNNER (BATCH MODE UPGRADED) ---
 def process_high_value_scrapes(context, page):
     log_msg("🔍 Navigating to Aviso Task Pool Dashboard...")
     page.goto("https://aviso.bz/tasks")
@@ -324,18 +363,15 @@ def process_high_value_scrapes(context, page):
         eligible_tasks = get_high_value_tasks_via_js(page) or []
         unique_tasks = [t for t in eligible_tasks if t['id'] not in processed_history]
         
-        # 🎯 اگر کرنٹ ویو پر کوئی نیا ٹاسک نہیں ملا
         if not unique_tasks:
             scroll_attempts += 1
             log_msg(f"⏳ No new tasks on current screen. Scrolling down... (Attempt {scroll_attempts}/5)")
             page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(3)
             
-            # اگر 5 بار اسکرول کرنے پر بھی کچھ نہ ملے، تو نیکسٹ پیج پر کلک کرے گا یا ریفریش کرے گا
             if scroll_attempts >= 5:
                 log_msg("🔄 Target limit reached on this view. Trying to navigate to next page or refreshing...")
                 try:
-                    # یہ کلاسیک نیکسٹ بٹن یا الیلیمنٹ کو تلاش کرے گا
                     next_btn = page.locator("a.page-link:has-text('»'), a:has-text('Дальше'), .pagination a").last
                     if next_btn.is_visible():
                         next_btn.click()
@@ -351,40 +387,74 @@ def process_high_value_scrapes(context, page):
                 scroll_attempts = 0
             continue
             
-        # اگر ٹاسک مل گئے تو اسکرول کاؤنٹر ری سیٹ
         scroll_attempts = 0
         
-        for task in unique_tasks:
+        # 🎯 Ab yahan hum 10-10 tasks ke chunks bana kar handle karenge
+        chunk_size = 10
+        for i in range(0, len(unique_tasks), chunk_size):
             if not bot_status["is_running"]: break
-            log_msg(f"🚀 Processing Task ID: {task['id']} ({task['price']} RUB)")
+            task_chunk = unique_tasks[i:i + chunk_size]
             
-            try:
-                task_page = context.new_page()
-                task_page.goto(task['url'], timeout=45000)
-                task_page.wait_for_load_state("networkidle")
+            log_msg(f"📦 Found {len(task_chunk)} unique tasks. Scraping details for the batch...")
+            batch_scraped_data = []
+            
+            # Phase 1: Har task ki page info fetch karna bulk processing se pehle
+            for task in task_chunk:
+                if not bot_status["is_running"]: break
+                log_msg(f"📥 Scrape Target Details -> ID: {task['id']} ({task['price']} RUB)")
                 
-                scraped_payload = extract_task_page_details(task_page)
-                task_page.close()
-                
-                if scraped_payload and scraped_payload['title']:
-                    is_approved, ai_result = analyze_with_silent_ai_stream(scraped_payload)
-                    if is_approved:
-                        fire_alert_to_telegram(task['url'], task['price'], ai_result)
-                        log_msg(f"✅ Task {task['id']} Dispached to Telegram.")
+                try:
+                    task_page = context.new_page()
+                    task_page.goto(task['url'], timeout=45000)
+                    task_page.wait_for_load_state("networkidle")
+                    
+                    scraped_payload = extract_task_page_details(task_page)
+                    task_page.close()
+                    
+                    if scraped_payload and scraped_payload['title']:
+                        scraped_payload['id'] = task['id']
+                        scraped_payload['url'] = task['url']
+                        scraped_payload['price'] = task['price']
+                        batch_scraped_data.append(scraped_payload)
                     else:
-                        log_msg(f"⚠️ Task {task['id']} Skipped: {ai_result}")
-                        
-                save_processed_task(task['id'])
-                processed_history.add(task['id'])
+                        # Failures ko skip aur mark kiya jata hai taake dubara process na ho
+                        save_processed_task(task['id'])
+                        processed_history.add(task['id'])
+                except Exception as e:
+                    log_msg(f"⚠️ Error scraping task page {task['id']}: {e}")
+                    save_processed_task(task['id'])
+                    processed_history.add(task['id'])
+            
+            if not batch_scraped_data:
+                continue
                 
-                # AI ریٹ لمیٹ کی وجہ سے یہاں توقف لازمی ہے تاکہ رن ٹائم بلاک نہ ہو
-                log_msg("⏳ Sleeping for 45 seconds to respect AI rate limits...")
-                time.sleep(45)
+            # Phase 2: Poore batch ka data aik hi baar AI ko send karna
+            log_msg(f"🚀 Dispatching bulk batch of {len(batch_scraped_data)} tasks to Silent AI Pro...")
+            batch_results = analyze_batch_with_silent_ai_stream(batch_scraped_data)
+            
+            # Phase 3: AI results ko evaluate kar ke direct actions lena
+            for task_data in batch_scraped_data:
+                tid = task_data['id']
+                turl = task_data['url']
+                tprice = task_data['price']
                 
-            except Exception as e:
-                save_processed_task(task['id'])
-                processed_history.add(task['id'])
-                time.sleep(5)
+                if tid in batch_results:
+                    result = batch_results[tid]
+                    if result["status"] == "APPROVED":
+                        fire_alert_to_telegram(turl, tprice, result["content"])
+                        log_msg(f"✅ Task {tid} Dispatched to Telegram (APPROVED).")
+                    else:
+                        log_msg(f"❌ Task {tid} Skipped (REJECTED): {result['content']}")
+                else:
+                    log_msg(f"⚠️ Task {tid} skipped because it was missing from AI output formatting.")
+                    
+                save_processed_task(tid)
+                processed_history.add(tid)
+            
+            # Phase 4: Aik full request ke bad mandatory dynamic delay dena (1 to 3 minutes)
+            sleep_delay = random.randint(60, 180)
+            log_msg(f"⏳ Batch finalized. Injecting a safety delay of {sleep_delay} seconds (1-3 mins) before next run...")
+            time.sleep(sleep_delay)
 
 def run_infinite_loop(username, password):
     global bot_status, current_browser_context
